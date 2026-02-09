@@ -5,8 +5,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
+import { Model } from 'mongoose';
 import { OAuth2Client } from 'google-auth-library';
+import {
+  MODEL_NAMES,
+  OAuthStateDocument,
+  RefreshSessionDocument,
+} from '../common/schemas/persistence.schemas';
 import {
   OAuthStateRecord,
   RefreshSessionRecord,
@@ -22,7 +29,6 @@ import {
   parseDurationMs,
   sha256,
 } from '../common/utils/crypto.util';
-import { InMemoryStore } from '../store/in-memory.store';
 import { UsersService } from '../users/users.service';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
 
@@ -41,7 +47,10 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
-    private readonly store: InMemoryStore,
+    @InjectModel(MODEL_NAMES.OAuthState)
+    private readonly oauthStateModel: Model<OAuthStateDocument>,
+    @InjectModel(MODEL_NAMES.RefreshSession)
+    private readonly refreshSessionModel: Model<RefreshSessionDocument>,
   ) {
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = this.configService.get<string>('GOOGLE_CLIENT_SECRET');
@@ -51,7 +60,7 @@ export class AuthService {
     }
   }
 
-  createOAuthStart(redirectTo?: string): { url: string; state: string; expiresAt: Date } {
+  async createOAuthStart(redirectTo?: string): Promise<{ url: string; state: string; expiresAt: Date }> {
     const state = createRandomHex(16);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     const allowedFrontendOrigin = this.configService.get<string>(
@@ -68,7 +77,7 @@ export class AuthService {
       expiresAt,
       redirectTo: normalizedRedirect,
     };
-    this.store.oauthStates.set(state, stateRecord);
+    await this.oauthStateModel.create(stateRecord);
     return {
       state,
       expiresAt,
@@ -90,7 +99,10 @@ export class AuthService {
       });
     }
 
-    const stateRecord = this.store.oauthStates.get(dto.state);
+    const stateRecord = await this.oauthStateModel
+      .findOne({ state: dto.state })
+      .lean<OAuthStateRecord>()
+      .exec();
     if (!stateRecord || stateRecord.expiresAt.getTime() < Date.now()) {
       throw new BadRequestException({
         code: 'AUTH_STATE_INVALID',
@@ -98,7 +110,7 @@ export class AuthService {
         details: {},
       });
     }
-    this.store.oauthStates.delete(dto.state);
+    await this.oauthStateModel.deleteOne({ state: dto.state }).exec();
 
     if (dto.error) {
       throw new BadRequestException({
@@ -109,7 +121,7 @@ export class AuthService {
     }
 
     const profile = await this.resolveGoogleProfile(dto);
-    const existingByEmail = this.usersService.findByEmail(profile.email);
+    const existingByEmail = await this.usersService.findByEmail(profile.email);
     if (existingByEmail && existingByEmail.googleId !== profile.sub) {
       throw new ForbiddenException({
         code: 'AUTH_ACCOUNT_CONFLICT',
@@ -118,14 +130,14 @@ export class AuthService {
       });
     }
 
-    const user = this.usersService.upsertGoogleUser({
+    const user = await this.usersService.upsertGoogleUser({
       googleId: profile.sub,
       email: profile.email,
       displayName: profile.name,
       avatarUrl: profile.picture,
     });
 
-    const { accessToken, refreshToken } = this.issueSessionTokens(user);
+    const { accessToken, refreshToken } = await this.issueSessionTokens(user);
     return {
       accessToken,
       refreshToken,
@@ -134,33 +146,35 @@ export class AuthService {
     };
   }
 
-  refreshSession(refreshToken: string): {
+  async refreshSession(refreshToken: string): Promise<{
     accessToken: string;
     refreshToken: string;
     user: UserRecord;
-  } {
-    const session = this.verifyRefreshSession(refreshToken);
-    session.revokedAt = new Date();
-    this.store.refreshSessions.set(session._id, session);
+  }> {
+    const session = await this.verifyRefreshSession(refreshToken);
+    await this.refreshSessionModel
+      .updateOne({ _id: session._id }, { $set: { revokedAt: new Date() } })
+      .exec();
 
-    const user = this.requireActiveUser(session.userId);
+    const user = await this.requireActiveUser(session.userId);
     const { accessToken, refreshToken: rotatedRefreshToken } =
-      this.issueSessionTokens(user);
+      await this.issueSessionTokens(user);
 
     return { accessToken, refreshToken: rotatedRefreshToken, user };
   }
 
-  logout(refreshToken: string): void {
+  async logout(refreshToken: string): Promise<void> {
     try {
-      const session = this.verifyRefreshSession(refreshToken);
-      session.revokedAt = new Date();
-      this.store.refreshSessions.set(session._id, session);
+      const session = await this.verifyRefreshSession(refreshToken);
+      await this.refreshSessionModel
+        .updateOne({ _id: session._id }, { $set: { revokedAt: new Date() } })
+        .exec();
     } catch {
       // Logout should be idempotent; invalid tokens do not throw.
     }
   }
 
-  getCurrentUser(userId: string): UserRecord {
+  async getCurrentUser(userId: string): Promise<UserRecord> {
     return this.requireActiveUser(userId);
   }
 
@@ -323,10 +337,10 @@ export class AuthService {
     });
   }
 
-  private issueSessionTokens(user: UserRecord): {
+  private async issueSessionTokens(user: UserRecord): Promise<{
     accessToken: string;
     refreshToken: string;
-  } {
+  }> {
     const jwtSecret = this.configService.get<string>('JWT_SECRET', 'dev-secret');
     const accessExpiresIn = this.configService.get<string>('JWT_EXPIRES_IN', '15m');
     const refreshExpiresIn = this.configService.get<string>(
@@ -352,12 +366,12 @@ export class AuthService {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + parseDurationMs(refreshExpiresIn)),
     };
-    this.store.refreshSessions.set(sessionId, refreshSession);
+    await this.refreshSessionModel.create(refreshSession);
 
     return { accessToken, refreshToken };
   }
 
-  private verifyRefreshSession(refreshToken: string): RefreshSessionRecord {
+  private async verifyRefreshSession(refreshToken: string): Promise<RefreshSessionRecord> {
     try {
       const payload = this.jwtService.verify<{
         type: string;
@@ -371,7 +385,10 @@ export class AuthService {
         throw new Error('Invalid refresh payload');
       }
 
-      const session = this.store.refreshSessions.get(payload.sid);
+      const session = await this.refreshSessionModel
+        .findById(payload.sid)
+        .lean<RefreshSessionRecord>()
+        .exec();
       if (!session) {
         throw new Error('Session missing');
       }
@@ -394,8 +411,8 @@ export class AuthService {
     }
   }
 
-  private requireActiveUser(userId: string): UserRecord {
-    const user = this.usersService.findById(userId);
+  private async requireActiveUser(userId: string): Promise<UserRecord> {
+    const user = await this.usersService.findById(userId);
     if (!user || user.status !== 'active') {
       throw new UnauthorizedException({
         code: 'USER_NOT_ACTIVE',

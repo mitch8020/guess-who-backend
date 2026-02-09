@@ -4,15 +4,24 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { MATCH_MIN_IMAGES } from '../common/constants';
+import {
+  MatchActionDocument,
+  MatchDocument,
+  MatchParticipantDocument,
+  MODEL_NAMES,
+  RoomMemberDocument,
+} from '../common/schemas/persistence.schemas';
 import {
   MatchActionRecord,
   MatchParticipantRecord,
   MatchRecord,
+  MatchReplayFrame,
   RequestPrincipal,
 } from '../common/types/domain.types';
 import { createId, createRandomHex, pickRandom, sha256, shuffle } from '../common/utils/crypto.util';
-import { InMemoryStore } from '../store/in-memory.store';
 import { ImagesService } from '../images/images.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RoomsService } from '../rooms/rooms.service';
@@ -22,21 +31,31 @@ import { SubmitActionDto } from './dto/submit-action.dto';
 @Injectable()
 export class MatchesService {
   constructor(
-    private readonly store: InMemoryStore,
+    @InjectModel(MODEL_NAMES.Match)
+    private readonly matchModel: Model<MatchDocument>,
+    @InjectModel(MODEL_NAMES.MatchParticipant)
+    private readonly matchParticipantModel: Model<MatchParticipantDocument>,
+    @InjectModel(MODEL_NAMES.MatchAction)
+    private readonly matchActionModel: Model<MatchActionDocument>,
+    @InjectModel(MODEL_NAMES.RoomMember)
+    private readonly roomMemberModel: Model<RoomMemberDocument>,
     private readonly roomsService: RoomsService,
     private readonly imagesService: ImagesService,
     private readonly realtimeService: RealtimeService,
   ) {}
 
-  startMatch(
+  async startMatch(
     roomId: string,
     principal: RequestPrincipal,
     dto: StartMatchDto,
-  ): Record<string, unknown> {
-    this.roomsService.getRoomById(roomId);
-    const hostMember = this.roomsService.ensureHostMember(roomId, principal);
+  ): Promise<Record<string, unknown>> {
+    await this.roomsService.getRoomById(roomId);
+    const hostMember = await this.roomsService.ensureHostMember(roomId, principal);
 
-    const opponentMember = this.store.roomMembers.get(dto.opponentMemberId);
+    const opponentMember = await this.roomMemberModel
+      .findById(dto.opponentMemberId)
+      .lean<any>()
+      .exec();
     if (!opponentMember || opponentMember.roomId !== roomId || opponentMember.status !== 'active') {
       throw new BadRequestException({
         code: 'MATCH_OPPONENT_INVALID',
@@ -52,7 +71,7 @@ export class MatchesService {
       });
     }
 
-    const room = this.roomsService.getRoomById(roomId);
+    const room = await this.roomsService.getRoomById(roomId);
     if (!room.settings.allowedBoardSizes.includes(dto.boardSize)) {
       throw new BadRequestException({
         code: 'BOARD_SIZE_NOT_ALLOWED',
@@ -61,18 +80,9 @@ export class MatchesService {
       });
     }
 
-    const activeMatch = [...this.store.matches.values()].find(
-      (match) => match.roomId === roomId && (match.status === 'in_progress' || match.status === 'waiting'),
-    );
-    if (activeMatch) {
-      throw new BadRequestException({
-        code: 'MATCH_ALREADY_ACTIVE',
-        message: 'Only one active match is allowed per room.',
-        details: { matchId: activeMatch._id },
-      });
-    }
+    await this.roomsService.ensureMatchCapacity(roomId);
 
-    const activeImageResult = this.imagesService.listImages(roomId, principal);
+    const activeImageResult = await this.imagesService.listImages(roomId, principal);
     if (activeImageResult.activeCount < MATCH_MIN_IMAGES) {
       throw new BadRequestException({
         code: 'INSUFFICIENT_IMAGES_MINIMUM',
@@ -111,25 +121,22 @@ export class MatchesService {
       createdAt: now,
       updatedAt: now,
     };
-    this.store.matches.set(match._id, match);
+    await this.matchModel.create(match);
 
-    const participants = [hostMember._id, opponentMember._id].map((memberId) => {
-      const participant: MatchParticipantRecord = {
-        _id: createId(),
-        matchId: match._id,
-        roomMemberId: memberId,
-        boardImageOrder: shuffle(selectedImages),
-        secretTargetImageId: pickRandom(selectedImages),
-        eliminatedImageIds: [],
-        result: 'in_progress',
-        readyAt: now,
-        lastActionAt: now,
-      };
-      this.store.matchParticipants.set(participant._id, participant);
-      return participant;
-    });
+    const participants = [hostMember._id, opponentMember._id].map((memberId) => ({
+      _id: createId(),
+      matchId: match._id,
+      roomMemberId: memberId,
+      boardImageOrder: shuffle(selectedImages),
+      secretTargetImageId: pickRandom(selectedImages),
+      eliminatedImageIds: [],
+      result: 'in_progress' as const,
+      readyAt: now,
+      lastActionAt: now,
+    }));
+    await this.matchParticipantModel.insertMany(participants);
 
-    this.appendAction(match._id, {
+    await this.appendAction(match._id, {
       actionType: 'system',
       payload: {
         event: 'match.started',
@@ -138,7 +145,7 @@ export class MatchesService {
       actorMemberId: undefined,
     });
 
-    this.roomsService.touchRoomActivity(roomId);
+    await this.roomsService.touchRoomActivity(roomId);
     this.realtimeService.publishMatchState(match._id, 'match.started', {
       matchId: match._id,
       roomId,
@@ -154,20 +161,88 @@ export class MatchesService {
     return this.buildMatchView(match, principal);
   }
 
-  getMatchDetail(roomId: string, matchId: string, principal: RequestPrincipal): Record<string, unknown> {
-    this.roomsService.ensureActiveMember(roomId, principal);
-    const match = this.requireMatch(roomId, matchId);
+  async getMatchDetail(
+    roomId: string,
+    matchId: string,
+    principal: RequestPrincipal,
+  ): Promise<Record<string, unknown>> {
+    await this.roomsService.ensureActiveMember(roomId, principal);
+    const match = await this.requireMatch(roomId, matchId);
     return this.buildMatchView(match, principal);
   }
 
-  submitAction(
+  async listRoomHistory(
+    roomId: string,
+    principal: RequestPrincipal,
+    cursor?: string,
+    limit = 20,
+  ): Promise<Record<string, unknown>> {
+    await this.roomsService.ensureActiveMember(roomId, principal);
+    const query: Record<string, unknown> = {
+      roomId,
+      status: { $in: ['completed', 'cancelled'] },
+    };
+
+    if (cursor) {
+      query._id = { $lt: cursor };
+    }
+
+    const matches = await this.matchModel
+      .find(query)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(limit, 1), 100))
+      .lean<MatchRecord[]>()
+      .exec();
+
+    const items = matches.map((match) => ({
+      matchId: match._id,
+      roomId: match.roomId,
+      status: match.status,
+      boardSize: match.boardSize,
+      winnerMemberId: match.winnerMemberId,
+      startedAt: match.startedAt,
+      endedAt: match.endedAt,
+      createdAt: match.createdAt,
+    }));
+
+    const nextCursor = matches.length > 0 ? matches[matches.length - 1]._id : null;
+    return { items, nextCursor };
+  }
+
+  async getReplay(
+    roomId: string,
+    matchId: string,
+    principal: RequestPrincipal,
+  ): Promise<{ matchId: string; frames: MatchReplayFrame[] }> {
+    await this.roomsService.ensureActiveMember(roomId, principal);
+    await this.requireMatch(roomId, matchId);
+
+    const actions = await this.matchActionModel
+      .find({ matchId })
+      .sort({ createdAt: 1 })
+      .lean<MatchActionRecord[]>()
+      .exec();
+
+    return {
+      matchId,
+      frames: actions.map((action) => ({
+        actionId: action._id,
+        actionType: action.actionType,
+        actorMemberId: action.actorMemberId,
+        payload: action.payload,
+        createdAt: action.createdAt,
+      })),
+    };
+  }
+
+  async submitAction(
     roomId: string,
     matchId: string,
     principal: RequestPrincipal,
     dto: SubmitActionDto,
-  ): Record<string, unknown> {
-    const actorMember = this.roomsService.ensureActiveMember(roomId, principal);
-    const match = this.requireMatch(roomId, matchId);
+  ): Promise<Record<string, unknown>> {
+    const actorMember = await this.roomsService.ensureActiveMember(roomId, principal);
+    const match = await this.requireMatch(roomId, matchId);
     if (match.status !== 'in_progress') {
       throw new BadRequestException({
         code: 'MATCH_NOT_ACTIVE',
@@ -176,7 +251,7 @@ export class MatchesService {
       });
     }
 
-    const participants = this.getParticipantsForMatch(match._id);
+    const participants = await this.getParticipantsForMatch(match._id);
     const actorParticipant = participants.find(
       (participant) => participant.roomMemberId === actorMember._id,
     );
@@ -262,10 +337,10 @@ export class MatchesService {
     }
 
     actorParticipant.lastActionAt = new Date();
-    this.store.matchParticipants.set(actorParticipant._id, actorParticipant);
-    this.store.matchParticipants.set(opponent._id, opponent);
+    await this.matchParticipantModel.updateOne({ _id: actorParticipant._id }, actorParticipant).exec();
+    await this.matchParticipantModel.updateOne({ _id: opponent._id }, opponent).exec();
 
-    this.appendAction(match._id, {
+    await this.appendAction(match._id, {
       actionType: dto.actionType,
       payload,
       actorMemberId: actorParticipant.roomMemberId,
@@ -277,8 +352,8 @@ export class MatchesService {
       }
     }
     match.updatedAt = new Date();
-    this.store.matches.set(match._id, match);
-    this.roomsService.touchRoomActivity(roomId);
+    await this.matchModel.updateOne({ _id: match._id }, match).exec();
+    await this.roomsService.touchRoomActivity(roomId);
 
     this.realtimeService.publishMatchState(match._id, 'action.applied', {
       matchId: match._id,
@@ -288,6 +363,7 @@ export class MatchesService {
       status: match.status,
       winnerMemberId: match.winnerMemberId,
     });
+    this.realtimeService.publishRoomUpdate(roomId, 'history.updated', { roomId, matchId: match._id });
     if (match.status === 'completed') {
       this.realtimeService.publishMatchState(match._id, 'match.completed', {
         matchId: match._id,
@@ -303,14 +379,14 @@ export class MatchesService {
     return this.buildMatchView(match, principal);
   }
 
-  forfeitMatch(roomId: string, matchId: string, principal: RequestPrincipal): Record<string, unknown> {
-    const actorMember = this.roomsService.ensureActiveMember(roomId, principal);
-    const match = this.requireMatch(roomId, matchId);
+  async forfeitMatch(roomId: string, matchId: string, principal: RequestPrincipal): Promise<Record<string, unknown>> {
+    const actorMember = await this.roomsService.ensureActiveMember(roomId, principal);
+    const match = await this.requireMatch(roomId, matchId);
     if (match.status !== 'in_progress') {
       return this.buildMatchView(match, principal);
     }
 
-    const participants = this.getParticipantsForMatch(match._id);
+    const participants = await this.getParticipantsForMatch(match._id);
     const actorParticipant = participants.find(
       (participant) => participant.roomMemberId === actorMember._id,
     );
@@ -329,15 +405,15 @@ export class MatchesService {
     opponent.result = 'guessed_correct';
     actorParticipant.lastActionAt = new Date();
     opponent.lastActionAt = new Date();
-    this.store.matchParticipants.set(actorParticipant._id, actorParticipant);
-    this.store.matchParticipants.set(opponent._id, opponent);
+    await this.matchParticipantModel.updateOne({ _id: actorParticipant._id }, actorParticipant).exec();
+    await this.matchParticipantModel.updateOne({ _id: opponent._id }, opponent).exec();
 
     match.status = 'completed';
     match.winnerMemberId = opponent.roomMemberId;
     match.endedAt = new Date();
     match.updatedAt = new Date();
-    this.store.matches.set(match._id, match);
-    this.appendAction(match._id, {
+    await this.matchModel.updateOne({ _id: match._id }, match).exec();
+    await this.appendAction(match._id, {
       actionType: 'system',
       payload: { event: 'forfeit' },
       actorMemberId: actorParticipant.roomMemberId,
@@ -348,13 +424,19 @@ export class MatchesService {
       winnerMemberId: match.winnerMemberId,
       reason: 'forfeit',
     });
+    this.realtimeService.publishRoomUpdate(roomId, 'history.updated', { roomId, matchId: match._id });
 
     return this.buildMatchView(match, principal);
   }
 
-  rematch(roomId: string, matchId: string, principal: RequestPrincipal, dto: RematchDto): Record<string, unknown> {
-    const currentMatch = this.requireMatch(roomId, matchId);
-    const participants = this.getParticipantsForMatch(currentMatch._id);
+  async rematch(
+    roomId: string,
+    matchId: string,
+    principal: RequestPrincipal,
+    dto: RematchDto,
+  ): Promise<Record<string, unknown>> {
+    const currentMatch = await this.requireMatch(roomId, matchId);
+    const participants = await this.getParticipantsForMatch(currentMatch._id);
     if (participants.length !== 2) {
       throw new BadRequestException({
         code: 'MATCH_PARTICIPANT_COUNT_INVALID',
@@ -362,7 +444,7 @@ export class MatchesService {
         details: {},
       });
     }
-    const actorMember = this.roomsService.ensureActiveMember(roomId, principal);
+    const actorMember = await this.roomsService.ensureActiveMember(roomId, principal);
     const opponent = participants.find((item) => item.roomMemberId !== actorMember._id);
     if (!opponent) {
       throw new BadRequestException({
@@ -371,15 +453,31 @@ export class MatchesService {
         details: {},
       });
     }
+
+    const room = await this.roomsService.getRoomById(roomId);
+    const boardSize =
+      dto.boardSize ??
+      room.settings.defaultBoardSize ??
+      room.settings.rematchBoardSizes?.[0] ??
+      currentMatch.boardSize;
+
     return this.startMatch(roomId, principal, {
-      boardSize: dto.boardSize ?? currentMatch.boardSize,
+      boardSize,
       opponentMemberId: opponent.roomMemberId,
     });
   }
 
-  private buildMatchView(match: MatchRecord, principal: RequestPrincipal): Record<string, unknown> {
-    const participants = this.getParticipantsForMatch(match._id);
-    const actions = [...(this.store.matchActions.get(match._id) ?? [])];
+  private async buildMatchView(
+    match: MatchRecord,
+    principal: RequestPrincipal,
+  ): Promise<Record<string, unknown>> {
+    const participants = await this.getParticipantsForMatch(match._id);
+    const actions = await this.matchActionModel
+      .find({ matchId: match._id })
+      .sort({ createdAt: 1 })
+      .lean<MatchActionRecord[]>()
+      .exec();
+
     const publicParticipants = participants.map((participant) => ({
       roomMemberId: participant.roomMemberId,
       eliminatedImageIds: participant.eliminatedImageIds,
@@ -388,14 +486,17 @@ export class MatchesService {
       lastActionAt: participant.lastActionAt,
     }));
 
-    const member = principal.kind === 'user'
-      ? [...this.store.roomMembers.values()].find(
-          (candidate) =>
-            candidate.roomId === match.roomId &&
-            candidate.userId === principal.userId &&
-            candidate.status === 'active',
-        )
-      : this.store.roomMembers.get(principal.memberId);
+    const member =
+      principal.kind === 'user'
+        ? await this.roomMemberModel
+            .findOne({
+              roomId: match.roomId,
+              userId: principal.userId,
+              status: 'active',
+            })
+            .lean<any>()
+            .exec()
+        : await this.roomMemberModel.findById(principal.memberId).lean<any>().exec();
 
     const myParticipant = participants.find(
       (participant) => participant.roomMemberId === member?._id,
@@ -418,8 +519,8 @@ export class MatchesService {
     };
   }
 
-  private requireMatch(roomId: string, matchId: string): MatchRecord {
-    const match = this.store.matches.get(matchId);
+  private async requireMatch(roomId: string, matchId: string): Promise<MatchRecord> {
+    const match = await this.matchModel.findById(matchId).lean<MatchRecord>().exec();
     if (!match || match.roomId !== roomId) {
       throw new NotFoundException({
         code: 'MATCH_NOT_FOUND',
@@ -430,16 +531,17 @@ export class MatchesService {
     return match;
   }
 
-  private getParticipantsForMatch(matchId: string): MatchParticipantRecord[] {
-    return [...this.store.matchParticipants.values()].filter(
-      (participant) => participant.matchId === matchId,
-    );
+  private async getParticipantsForMatch(matchId: string): Promise<MatchParticipantRecord[]> {
+    return this.matchParticipantModel
+      .find({ matchId })
+      .lean<MatchParticipantRecord[]>()
+      .exec();
   }
 
-  private appendAction(
+  private async appendAction(
     matchId: string,
     action: Pick<MatchActionRecord, 'actionType' | 'payload' | 'actorMemberId'>,
-  ): MatchActionRecord {
+  ): Promise<MatchActionRecord> {
     const actionRecord: MatchActionRecord = {
       _id: createId(),
       matchId,
@@ -448,9 +550,7 @@ export class MatchesService {
       payload: action.payload,
       createdAt: new Date(),
     };
-    const list = this.store.matchActions.get(matchId) ?? [];
-    list.push(actionRecord);
-    this.store.matchActions.set(matchId, list);
+    await this.matchActionModel.create(actionRecord);
     return actionRecord;
   }
 }

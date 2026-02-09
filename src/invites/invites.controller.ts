@@ -31,7 +31,7 @@ export class InvitesController {
     @Param('roomId') roomId: string,
     @Body() dto: CreateInviteDto,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -43,17 +43,17 @@ export class InvitesController {
   }
 
   @Get('invites/:code')
-  resolveInvite(@Param('code') code: string): Record<string, unknown> {
+  resolveInvite(@Param('code') code: string): Promise<Record<string, unknown>> {
     return this.invitesService.resolveInvite(code);
   }
 
   @Post('invites/:code/join')
   @Throttle({ default: { ttl: 600_000, limit: 20 } })
-  joinInvite(
+  async joinInvite(
     @Param('code') code: string,
     @Body() dto: JoinInviteDto,
     @Headers('authorization') authorizationHeader: string | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const headerPrincipal = this.authService.getOptionalPrincipal(authorizationHeader);
     const bodyPrincipal = dto.authToken
       ? this.authService.getOptionalPrincipal(`Bearer ${dto.authToken}`)
@@ -69,7 +69,7 @@ export class InvitesController {
     @Param('roomId') roomId: string,
     @Param('inviteId') inviteId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',

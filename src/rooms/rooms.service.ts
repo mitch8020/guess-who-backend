@@ -6,7 +6,15 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
-import { ROOM_DEFAULTS } from '../common/constants';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { MAX_ACTIVE_MATCHES_PER_ROOM, ROOM_DEFAULTS } from '../common/constants';
+import {
+  MatchDocument,
+  MODEL_NAMES,
+  RoomDocument,
+  RoomMemberDocument,
+} from '../common/schemas/persistence.schemas';
 import {
   RequestPrincipal,
   RoomMemberRecord,
@@ -14,7 +22,6 @@ import {
   RoomSettings,
 } from '../common/types/domain.types';
 import { createId } from '../common/utils/crypto.util';
-import { InMemoryStore } from '../store/in-memory.store';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { RemoveMemberDto } from './dto/remove-member.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
@@ -24,7 +31,12 @@ export class RoomsService {
   private readonly temporaryRoomTtlHours: number;
 
   constructor(
-    private readonly store: InMemoryStore,
+    @InjectModel(MODEL_NAMES.Room)
+    private readonly roomModel: Model<RoomDocument>,
+    @InjectModel(MODEL_NAMES.RoomMember)
+    private readonly roomMemberModel: Model<RoomMemberDocument>,
+    @InjectModel(MODEL_NAMES.Match)
+    private readonly matchModel: Model<MatchDocument>,
     configService: ConfigService,
   ) {
     this.temporaryRoomTtlHours = Number(
@@ -32,10 +44,10 @@ export class RoomsService {
     );
   }
 
-  createRoom(hostUserId: string, dto: CreateRoomDto): {
+  async createRoom(hostUserId: string, dto: CreateRoomDto): Promise<{
     room: RoomRecord;
     hostMember: RoomMemberRecord;
-  } {
+  }> {
     const now = new Date();
     const settings = this.normalizeRoomSettings(dto.settings);
     const room: RoomRecord = {
@@ -65,26 +77,32 @@ export class RoomsService {
       lastSeenAt: now,
     };
 
-    this.store.rooms.set(room._id, room);
-    this.store.roomMembers.set(hostMember._id, hostMember);
+    await this.roomModel.create(room);
+    await this.roomMemberModel.create(hostMember);
 
     return { room, hostMember };
   }
 
-  listRoomsForUser(userId: string): RoomRecord[] {
-    const joinedRoomIds = new Set(
-      [...this.store.roomMembers.values()]
-        .filter((member) => member.userId === userId && member.status === 'active')
-        .map((member) => member.roomId),
-    );
+  async listRoomsForUser(userId: string): Promise<RoomRecord[]> {
+    const memberships = await this.roomMemberModel
+      .find({ userId, status: 'active' })
+      .lean<RoomMemberRecord[]>()
+      .exec();
+    const joinedRoomIds = memberships.map((member) => member.roomId);
 
-    return [...this.store.rooms.values()]
-      .filter((room) => !room.isArchived && joinedRoomIds.has(room._id))
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    if (joinedRoomIds.length === 0) {
+      return [];
+    }
+
+    return this.roomModel
+      .find({ _id: { $in: joinedRoomIds }, isArchived: false })
+      .sort({ updatedAt: -1 })
+      .lean<RoomRecord[]>()
+      .exec();
   }
 
-  getRoomById(roomId: string): RoomRecord {
-    const room = this.store.rooms.get(roomId);
+  async getRoomById(roomId: string): Promise<RoomRecord> {
+    const room = await this.roomModel.findById(roomId).lean<RoomRecord>().exec();
     if (!room || room.isArchived) {
       throw new NotFoundException({
         code: 'ROOM_NOT_FOUND',
@@ -95,15 +113,18 @@ export class RoomsService {
     return room;
   }
 
-  getRoomDetailForPrincipal(roomId: string, principal: RequestPrincipal): Record<string, unknown> {
-    const room = this.getRoomById(roomId);
-    const member = this.ensureActiveMember(roomId, principal);
-    const members = this.listRoomMembers(roomId);
+  async getRoomDetailForPrincipal(
+    roomId: string,
+    principal: RequestPrincipal,
+  ): Promise<Record<string, unknown>> {
+    const room = await this.getRoomById(roomId);
+    const member = await this.ensureActiveMember(roomId, principal);
+    const members = await this.listRoomMembers(roomId);
     return { room, member, members };
   }
 
-  updateRoom(roomId: string, hostUserId: string, dto: UpdateRoomDto): RoomRecord {
-    const room = this.getRoomById(roomId);
+  async updateRoom(roomId: string, hostUserId: string, dto: UpdateRoomDto): Promise<RoomRecord> {
+    const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
 
     const updatedRoom: RoomRecord = {
@@ -118,36 +139,41 @@ export class RoomsService {
       updatedAt: new Date(),
     };
 
-    this.store.rooms.set(roomId, updatedRoom);
+    await this.roomModel.updateOne({ _id: roomId }, updatedRoom).exec();
     return updatedRoom;
   }
 
-  archiveRoom(roomId: string, hostUserId: string): void {
-    const room = this.getRoomById(roomId);
+  async archiveRoom(roomId: string, hostUserId: string): Promise<void> {
+    const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
 
-    const activeMatch = [...this.store.matches.values()].find(
-      (match) =>
-        match.roomId === roomId &&
-        (match.status === 'in_progress' || match.status === 'waiting'),
-    );
-    if (activeMatch) {
+    const activeMatchCount = await this.matchModel
+      .countDocuments({ roomId, status: { $in: ['in_progress', 'waiting'] } })
+      .exec();
+    if (activeMatchCount > 0) {
       throw new BadRequestException({
         code: 'ROOM_HAS_ACTIVE_MATCH',
         message: 'Cannot archive room while an active match is running.',
-        details: { matchId: activeMatch._id },
+        details: {},
       });
     }
 
-    room.isArchived = true;
-    room.updatedAt = new Date();
-    this.store.rooms.set(roomId, room);
+    await this.roomModel
+      .updateOne({ _id: roomId }, { $set: { isArchived: true, updatedAt: new Date() } })
+      .exec();
   }
 
-  removeMember(roomId: string, hostUserId: string, dto: RemoveMemberDto): RoomMemberRecord[] {
-    const room = this.getRoomById(roomId);
+  async removeMember(
+    roomId: string,
+    hostUserId: string,
+    dto: RemoveMemberDto,
+  ): Promise<RoomMemberRecord[]> {
+    const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
-    const member = this.store.roomMembers.get(dto.memberId);
+    const member = await this.roomMemberModel
+      .findById(dto.memberId)
+      .lean<RoomMemberRecord>()
+      .exec();
     if (!member || member.roomId !== roomId || member.status !== 'active') {
       throw new NotFoundException({
         code: 'MEMBER_NOT_FOUND',
@@ -163,28 +189,90 @@ export class RoomsService {
       });
     }
 
-    member.status = 'kicked';
-    member.lastSeenAt = new Date();
-    this.store.roomMembers.set(member._id, member);
+    await this.roomMemberModel
+      .updateOne(
+        { _id: dto.memberId },
+        {
+          $set: {
+            status: 'kicked',
+            lastSeenAt: new Date(),
+          },
+        },
+      )
+      .exec();
     return this.listRoomMembers(roomId);
   }
 
-  listRoomMembers(roomId: string): RoomMemberRecord[] {
-    return [...this.store.roomMembers.values()]
-      .filter((member) => member.roomId === roomId && member.status === 'active')
-      .sort((a, b) => a.joinedAt.getTime() - b.joinedAt.getTime());
+  async muteMember(
+    roomId: string,
+    hostUserId: string,
+    memberId: string,
+    mutedUntil: Date,
+  ): Promise<RoomMemberRecord> {
+    const room = await this.getRoomById(roomId);
+    this.ensureHostUser(room, hostUserId);
+    const member = await this.roomMemberModel
+      .findOneAndUpdate(
+        { _id: memberId, roomId, status: 'active' },
+        { $set: { mutedUntil } },
+        { new: true },
+      )
+      .lean<RoomMemberRecord>()
+      .exec();
+
+    if (!member) {
+      throw new NotFoundException({
+        code: 'MEMBER_NOT_FOUND',
+        message: 'Room member was not found.',
+        details: {},
+      });
+    }
+
+    return member;
   }
 
-  ensureActiveMember(roomId: string, principal: RequestPrincipal): RoomMemberRecord {
+  async unmuteMember(roomId: string, hostUserId: string, memberId: string): Promise<RoomMemberRecord> {
+    const room = await this.getRoomById(roomId);
+    this.ensureHostUser(room, hostUserId);
+    const member = await this.roomMemberModel
+      .findOneAndUpdate(
+        { _id: memberId, roomId, status: 'active' },
+        { $unset: { mutedUntil: 1 } },
+        { new: true },
+      )
+      .lean<RoomMemberRecord>()
+      .exec();
+
+    if (!member) {
+      throw new NotFoundException({
+        code: 'MEMBER_NOT_FOUND',
+        message: 'Room member was not found.',
+        details: {},
+      });
+    }
+
+    return member;
+  }
+
+  async listRoomMembers(roomId: string): Promise<RoomMemberRecord[]> {
+    return this.roomMemberModel
+      .find({ roomId, status: 'active' })
+      .sort({ joinedAt: 1 })
+      .lean<RoomMemberRecord[]>()
+      .exec();
+  }
+
+  async ensureActiveMember(roomId: string, principal: RequestPrincipal): Promise<RoomMemberRecord> {
     const member =
       principal.kind === 'user'
-        ? [...this.store.roomMembers.values()].find(
-            (candidate) =>
-              candidate.roomId === roomId &&
-              candidate.userId === principal.userId &&
-              candidate.status === 'active',
-          )
-        : this.store.roomMembers.get(principal.memberId);
+        ? await this.roomMemberModel
+            .findOne({ roomId, userId: principal.userId, status: 'active' })
+            .lean<RoomMemberRecord>()
+            .exec()
+        : await this.roomMemberModel
+            .findById(principal.memberId)
+            .lean<RoomMemberRecord>()
+            .exec();
 
     if (
       !member ||
@@ -201,8 +289,8 @@ export class RoomsService {
     return member;
   }
 
-  ensureHostMember(roomId: string, principal: RequestPrincipal): RoomMemberRecord {
-    const member = this.ensureActiveMember(roomId, principal);
+  async ensureHostMember(roomId: string, principal: RequestPrincipal): Promise<RoomMemberRecord> {
+    const member = await this.ensureActiveMember(roomId, principal);
     if (member.role !== 'host') {
       throw new ForbiddenException({
         code: 'HOST_ONLY',
@@ -213,34 +301,65 @@ export class RoomsService {
     return member;
   }
 
-  touchRoomActivity(roomId: string): void {
-    const room = this.store.rooms.get(roomId);
+  async ensureMatchCapacity(roomId: string): Promise<void> {
+    const activeMatchCount = await this.matchModel
+      .countDocuments({ roomId, status: { $in: ['in_progress', 'waiting'] } })
+      .exec();
+
+    if (activeMatchCount >= MAX_ACTIVE_MATCHES_PER_ROOM) {
+      throw new BadRequestException({
+        code: 'MATCH_ALREADY_ACTIVE',
+        message: 'Only one active match is allowed per room.',
+        details: {},
+      });
+    }
+  }
+
+  async touchRoomActivity(roomId: string): Promise<void> {
+    const room = await this.roomModel.findById(roomId).lean<RoomRecord>().exec();
     if (!room || room.isArchived) {
       return;
     }
     const now = new Date();
-    room.lastActivityAt = now;
+    const updates: Record<string, unknown> = {
+      lastActivityAt: now,
+      updatedAt: now,
+    };
     if (room.type === 'temporary') {
-      room.temporaryExpiresAt = new Date(now.getTime() + this.temporaryRoomTtlHours * 3_600_000);
+      updates.temporaryExpiresAt = new Date(now.getTime() + this.temporaryRoomTtlHours * 3_600_000);
     }
-    room.updatedAt = now;
-    this.store.rooms.set(room._id, room);
+
+    await this.roomModel.updateOne({ _id: roomId }, { $set: updates }).exec();
   }
 
-  createOrReactivateUserMember(
+  async createOrReactivateUserMember(
     roomId: string,
     userId: string,
     displayName: string,
-  ): RoomMemberRecord {
-    const existing = [...this.store.roomMembers.values()].find(
-      (member) => member.roomId === roomId && member.userId === userId,
-    );
+  ): Promise<RoomMemberRecord> {
+    const existing = await this.roomMemberModel
+      .findOne({ roomId, userId })
+      .lean<RoomMemberRecord>()
+      .exec();
     if (existing) {
-      existing.status = 'active';
-      existing.lastSeenAt = new Date();
-      existing.displayName = displayName;
-      this.store.roomMembers.set(existing._id, existing);
-      return existing;
+      await this.roomMemberModel
+        .updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              status: 'active',
+              lastSeenAt: new Date(),
+              displayName,
+            },
+          },
+        )
+        .exec();
+      return {
+        ...existing,
+        status: 'active',
+        lastSeenAt: new Date(),
+        displayName,
+      };
     }
 
     const member: RoomMemberRecord = {
@@ -253,11 +372,15 @@ export class RoomsService {
       joinedAt: new Date(),
       lastSeenAt: new Date(),
     };
-    this.store.roomMembers.set(member._id, member);
+    await this.roomMemberModel.create(member);
     return member;
   }
 
-  createGuestMember(roomId: string, guestSessionId: string, displayName: string): RoomMemberRecord {
+  async createGuestMember(
+    roomId: string,
+    guestSessionId: string,
+    displayName: string,
+  ): Promise<RoomMemberRecord> {
     const member: RoomMemberRecord = {
       _id: createId(),
       roomId,
@@ -268,25 +391,29 @@ export class RoomsService {
       joinedAt: new Date(),
       lastSeenAt: new Date(),
     };
-    this.store.roomMembers.set(member._id, member);
+    await this.roomMemberModel.create(member);
     return member;
   }
 
   @Cron(CronExpression.EVERY_10_MINUTES)
-  cleanupTemporaryRooms(): void {
+  async cleanupTemporaryRooms(): Promise<void> {
     const now = Date.now();
-    for (const room of this.store.rooms.values()) {
-      if (room.isArchived || room.type !== 'temporary') {
-        continue;
-      }
-      const inactivityMs = now - room.lastActivityAt.getTime();
-      const ttlMs = this.temporaryRoomTtlHours * 3_600_000;
-      if (inactivityMs > ttlMs) {
-        room.isArchived = true;
-        room.updatedAt = new Date();
-        this.store.rooms.set(room._id, room);
-      }
-    }
+    const ttlMs = this.temporaryRoomTtlHours * 3_600_000;
+    await this.roomModel
+      .updateMany(
+        {
+          isArchived: false,
+          type: 'temporary',
+          lastActivityAt: { $lt: new Date(now - ttlMs) },
+        },
+        {
+          $set: {
+            isArchived: true,
+            updatedAt: new Date(),
+          },
+        },
+      )
+      .exec();
   }
 
   private ensureHostUser(room: RoomRecord, userId: string): void {
@@ -300,22 +427,35 @@ export class RoomsService {
   }
 
   private normalizeRoomSettings(settings?: Partial<RoomSettings>): RoomSettings {
-    const nextSettings: RoomSettings = {
-      allowedBoardSizes:
-        settings?.allowedBoardSizes && settings.allowedBoardSizes.length > 0
-          ? [...new Set(settings.allowedBoardSizes)].sort((a, b) => a - b)
-          : [...ROOM_DEFAULTS.allowedBoardSizes],
-      minPlayers: 2,
-      maxPlayers: settings?.maxPlayers ?? ROOM_DEFAULTS.maxPlayers,
-      allowGuestJoin: settings?.allowGuestJoin ?? true,
-    };
+    const allowedBoardSizes =
+      settings?.allowedBoardSizes && settings.allowedBoardSizes.length > 0
+        ? [...new Set(settings.allowedBoardSizes)].sort((a, b) => a - b)
+        : [...ROOM_DEFAULTS.allowedBoardSizes];
 
-    if (nextSettings.maxPlayers < ROOM_DEFAULTS.minPlayers) {
-      nextSettings.maxPlayers = ROOM_DEFAULTS.minPlayers;
+    let maxPlayers = settings?.maxPlayers ?? ROOM_DEFAULTS.maxPlayers;
+    if (maxPlayers < ROOM_DEFAULTS.minPlayers) {
+      maxPlayers = ROOM_DEFAULTS.minPlayers;
     }
-    if (nextSettings.maxPlayers > ROOM_DEFAULTS.hardMaxPlayers) {
-      nextSettings.maxPlayers = ROOM_DEFAULTS.hardMaxPlayers;
+    if (maxPlayers > ROOM_DEFAULTS.hardMaxPlayers) {
+      maxPlayers = ROOM_DEFAULTS.hardMaxPlayers;
     }
-    return nextSettings;
+
+    const defaultBoardSize = settings?.defaultBoardSize;
+    const rematchBoardSizes =
+      settings?.rematchBoardSizes && settings.rematchBoardSizes.length > 0
+        ? [...new Set(settings.rematchBoardSizes)].sort((a, b) => a - b)
+        : [];
+
+    return {
+      allowedBoardSizes,
+      minPlayers: ROOM_DEFAULTS.minPlayers,
+      maxPlayers,
+      allowGuestJoin: settings?.allowGuestJoin ?? true,
+      defaultBoardSize:
+        defaultBoardSize && allowedBoardSizes.includes(defaultBoardSize)
+          ? defaultBoardSize
+          : undefined,
+      rematchBoardSizes: rematchBoardSizes.filter((size) => allowedBoardSizes.includes(size)),
+    };
   }
 }

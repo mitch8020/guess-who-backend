@@ -24,11 +24,11 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Get('google')
-  getGoogleStart(
+  async getGoogleStart(
     @Query('redirectTo') redirectTo: string | undefined,
     @Res() response: Response,
-  ): void {
-    const oauthStart = this.authService.createOAuthStart(redirectTo);
+  ): Promise<void> {
+    const oauthStart = await this.authService.createOAuthStart(redirectTo);
     response.redirect(oauthStart.url);
   }
 
@@ -57,11 +57,11 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(200)
-  refresh(
+  async refresh(
     @Body() body: RefreshDto,
     @Headers('authorization') authorizationHeader: string | undefined,
     @Res({ passthrough: true }) response: Response,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const tokenFromHeader = this.authService.extractBearerToken(authorizationHeader);
     const refreshToken = body.refreshToken ?? tokenFromHeader ?? response.req.cookies?.refreshToken;
     if (!refreshToken) {
@@ -71,7 +71,7 @@ export class AuthController {
         details: {},
       });
     }
-    const session = this.authService.refreshSession(refreshToken);
+    const session = await this.authService.refreshSession(refreshToken);
     this.attachRefreshCookie(response, session.refreshToken);
     return {
       accessToken: session.accessToken,
@@ -82,22 +82,24 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(204)
-  logout(
+  async logout(
     @Body() body: LogoutDto,
     @Headers('authorization') authorizationHeader: string | undefined,
     @Res({ passthrough: true }) response: Response,
-  ): void {
+  ): Promise<void> {
     const tokenFromHeader = this.authService.extractBearerToken(authorizationHeader);
     const refreshToken = body.refreshToken ?? tokenFromHeader ?? response.req.cookies?.refreshToken;
     if (refreshToken) {
-      this.authService.logout(refreshToken);
+      await this.authService.logout(refreshToken);
     }
     response.clearCookie('refreshToken');
   }
 
   @Get('me')
   @UseGuards(AccessTokenGuard)
-  me(@CurrentPrincipal() principal: RequestPrincipal | undefined): Record<string, unknown> {
+  async me(
+    @CurrentPrincipal() principal: RequestPrincipal | undefined,
+  ): Promise<Record<string, unknown>> {
     if (!principal || principal.kind !== 'user') {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -105,7 +107,7 @@ export class AuthController {
         details: {},
       });
     }
-    const user = this.authService.getCurrentUser(principal.userId);
+    const user = await this.authService.getCurrentUser(principal.userId);
     return { user };
   }
 

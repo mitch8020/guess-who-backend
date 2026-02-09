@@ -26,6 +26,8 @@ export interface RoomSettings {
   minPlayers: number;
   maxPlayers: number;
   allowGuestJoin: boolean;
+  defaultBoardSize?: number;
+  rematchBoardSizes?: number[];
 }
 
 export interface RoomRecord {
@@ -49,6 +51,7 @@ export interface RoomMemberRecord {
   displayName: string;
   role: RoomMemberRole;
   status: RoomMemberStatus;
+  mutedUntil?: Date;
   joinedAt: Date;
   lastSeenAt: Date;
 }
@@ -114,6 +117,22 @@ export interface MatchActionRecord {
   matchId: string;
   actorMemberId?: string;
   actionType: MatchActionType;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+}
+
+export interface ChatMessageRecord {
+  _id: string;
+  roomId: string;
+  memberId: string;
+  message: string;
+  createdAt: Date;
+}
+
+export interface MatchReplayFrame {
+  actionId: string;
+  actionType: MatchActionType;
+  actorMemberId?: string;
   payload: Record<string, unknown>;
   createdAt: Date;
 }

@@ -75,26 +75,27 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('room.join')
-  joinRoom(
+  async joinRoom(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string },
-  ): { ok: true } {
+  ): Promise<{ ok: true; snapshot?: Record<string, unknown> }> {
     const state = this.requireSocketState(client.id);
-    this.roomsService.ensureActiveMember(payload.roomId, state.principal);
+    await this.roomsService.ensureActiveMember(payload.roomId, state.principal);
     state.joinedRoomIds.add(payload.roomId);
     client.join(`room:${payload.roomId}:presence`);
     client.join(`room:${payload.roomId}:updates`);
     this.emitRoomPresence(payload.roomId, this.buildRoomPresence(payload.roomId));
-    return { ok: true };
+    const snapshot = await this.roomsService.getRoomDetailForPrincipal(payload.roomId, state.principal);
+    return { ok: true, snapshot };
   }
 
   @SubscribeMessage('match.join')
-  joinMatch(
+  async joinMatch(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { roomId: string; matchId: string },
-  ): { ok: true } {
+  ): Promise<{ ok: true }> {
     const state = this.requireSocketState(client.id);
-    this.roomsService.ensureActiveMember(payload.roomId, state.principal);
+    await this.roomsService.ensureActiveMember(payload.roomId, state.principal);
     state.joinedMatchIds.add(payload.matchId);
     client.join(`match:${payload.matchId}:state`);
     return { ok: true };

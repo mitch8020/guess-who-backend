@@ -1,7 +1,8 @@
-import { createHash, randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { Types } from 'mongoose';
 import { INVITE_CODE_LENGTH } from '../constants';
 
-export const createId = (): string => randomUUID();
+export const createId = (): string => new Types.ObjectId().toHexString();
 
 export const sha256 = (value: string | Buffer): string =>
   createHash('sha256').update(value).digest('hex');

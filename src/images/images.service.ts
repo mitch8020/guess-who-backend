@@ -4,32 +4,37 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { imageSize } from 'image-size';
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   MATCH_MIN_IMAGES,
   MAX_UPLOAD_MB,
 } from '../common/constants';
+import { GridFsService } from '../common/persistence/gridfs.service';
+import { MODEL_NAMES, RoomImageDocument } from '../common/schemas/persistence.schemas';
 import { RequestPrincipal, RoomImageRecord } from '../common/types/domain.types';
 import { sha256, createId } from '../common/utils/crypto.util';
 import { detectImageMimeType } from '../common/utils/image-signature.util';
 import { RealtimeService } from '../realtime/realtime.service';
-import { InMemoryStore } from '../store/in-memory.store';
 import { RoomsService } from '../rooms/rooms.service';
 
 @Injectable()
 export class ImagesService {
   constructor(
-    private readonly store: InMemoryStore,
+    @InjectModel(MODEL_NAMES.RoomImage)
+    private readonly roomImageModel: Model<RoomImageDocument>,
+    private readonly gridFsService: GridFsService,
     private readonly roomsService: RoomsService,
     private readonly realtimeService: RealtimeService,
   ) {}
 
-  uploadImage(
+  async uploadImage(
     roomId: string,
     principal: RequestPrincipal,
     file: Express.Multer.File | undefined,
-  ): RoomImageRecord {
+  ): Promise<RoomImageRecord> {
     if (!file) {
       throw new BadRequestException({
         code: 'IMAGE_FILE_REQUIRED',
@@ -46,8 +51,8 @@ export class ImagesService {
       });
     }
 
-    this.roomsService.getRoomById(roomId);
-    const member = this.roomsService.ensureActiveMember(roomId, principal);
+    await this.roomsService.getRoomById(roomId);
+    const member = await this.roomsService.ensureActiveMember(roomId, principal);
 
     const detectedMime = detectImageMimeType(file.buffer);
     if (!detectedMime || !ALLOWED_IMAGE_MIME_TYPES.has(detectedMime)) {
@@ -67,9 +72,11 @@ export class ImagesService {
     }
 
     const digest = sha256(file.buffer);
-    const duplicate = [...this.store.images.values()].find(
-      (image) => image.roomId === roomId && image.sha256 === digest && image.isActive,
-    );
+    const duplicate = await this.roomImageModel
+      .findOne({ roomId, sha256: digest, isActive: true })
+      .lean<RoomImageRecord>()
+      .exec();
+
     if (duplicate) {
       throw new BadRequestException({
         code: 'IMAGE_DUPLICATE',
@@ -79,11 +86,16 @@ export class ImagesService {
     }
 
     const dimensions = imageSize(file.buffer);
+    const storageFileId = await this.gridFsService.uploadBuffer(file.buffer, file.originalname, file.mimetype, {
+      roomId,
+      uploaderMemberId: member._id,
+    });
+
     const imageRecord: RoomImageRecord = {
       _id: createId(),
       roomId,
       uploaderMemberId: member._id,
-      storageFileId: createId(),
+      storageFileId,
       filename: file.originalname,
       mimeType: file.mimetype,
       width: dimensions.width ?? 0,
@@ -94,9 +106,8 @@ export class ImagesService {
       createdAt: new Date(),
     };
 
-    this.store.images.set(imageRecord._id, imageRecord);
-    this.store.imageBuffers.set(imageRecord.storageFileId, file.buffer);
-    this.roomsService.touchRoomActivity(roomId);
+    await this.roomImageModel.create(imageRecord);
+    await this.roomsService.touchRoomActivity(roomId);
     this.realtimeService.publishRoomUpdate(roomId, 'image.added', {
       roomId,
       imageId: imageRecord._id,
@@ -106,15 +117,20 @@ export class ImagesService {
     return imageRecord;
   }
 
-  listImages(roomId: string, principal: RequestPrincipal): {
+  async listImages(
+    roomId: string,
+    principal: RequestPrincipal,
+  ): Promise<{
     images: RoomImageRecord[];
     activeCount: number;
     minRequiredToStart: number;
-  } {
-    this.roomsService.ensureActiveMember(roomId, principal);
-    const images = [...this.store.images.values()].filter(
-      (image) => image.roomId === roomId && image.isActive,
-    );
+  }> {
+    await this.roomsService.ensureActiveMember(roomId, principal);
+    const images = await this.roomImageModel
+      .find({ roomId, isActive: true })
+      .lean<RoomImageRecord[]>()
+      .exec();
+
     return {
       images,
       activeCount: images.length,
@@ -122,10 +138,14 @@ export class ImagesService {
     };
   }
 
-  deleteImage(roomId: string, imageId: string, principal: RequestPrincipal): void {
-    this.roomsService.getRoomById(roomId);
-    const member = this.roomsService.ensureActiveMember(roomId, principal);
-    const image = this.store.images.get(imageId);
+  async deleteImage(roomId: string, imageId: string, principal: RequestPrincipal): Promise<void> {
+    await this.roomsService.getRoomById(roomId);
+    const member = await this.roomsService.ensureActiveMember(roomId, principal);
+    const image = await this.roomImageModel
+      .findById(imageId)
+      .lean<RoomImageRecord>()
+      .exec();
+
     if (!image || image.roomId !== roomId || !image.isActive) {
       throw new NotFoundException({
         code: 'IMAGE_NOT_FOUND',
@@ -144,13 +164,47 @@ export class ImagesService {
       });
     }
 
-    image.isActive = false;
-    this.store.images.set(imageId, image);
-    this.roomsService.touchRoomActivity(roomId);
+    await this.roomImageModel
+      .updateOne({ _id: imageId }, { $set: { isActive: false } })
+      .exec();
+    await this.gridFsService.deleteById(image.storageFileId);
+
+    await this.roomsService.touchRoomActivity(roomId);
     this.realtimeService.publishRoomUpdate(roomId, 'image.removed', {
       roomId,
       imageId,
       actorMemberId: member._id,
     });
+  }
+
+  async bulkRemoveImages(
+    roomId: string,
+    principal: RequestPrincipal,
+    imageIds: string[],
+  ): Promise<{ removedImageIds: string[] }> {
+    const member = await this.roomsService.ensureHostMember(roomId, principal);
+    const images = await this.roomImageModel
+      .find({ _id: { $in: imageIds }, roomId, isActive: true })
+      .lean<RoomImageRecord[]>()
+      .exec();
+
+    if (images.length === 0) {
+      return { removedImageIds: [] };
+    }
+
+    const resolvedIds = images.map((image) => image._id);
+    await this.roomImageModel
+      .updateMany({ _id: { $in: resolvedIds } }, { $set: { isActive: false } })
+      .exec();
+
+    await Promise.all(images.map((image) => this.gridFsService.deleteById(image.storageFileId)));
+
+    this.realtimeService.publishRoomUpdate(roomId, 'images.bulk_removed', {
+      roomId,
+      actorMemberId: member._id,
+      imageIds: resolvedIds,
+    });
+
+    return { removedImageIds: resolvedIds };
   }
 }

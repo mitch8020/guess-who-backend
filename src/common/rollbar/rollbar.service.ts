@@ -16,6 +16,7 @@ export class RollbarService {
     this.client = new Rollbar({
       accessToken,
       environment: this.configService.get<string>('ROLLBAR_ENV', 'development'),
+      codeVersion: this.configService.get<string>('ROLLBAR_CODE_VERSION', 'dev'),
       captureUncaught: true,
       captureUnhandledRejections: true,
       payload: {

@@ -4,11 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { AuthService } from '../auth/auth.service';
+import { InviteDocument, MODEL_NAMES } from '../common/schemas/persistence.schemas';
 import { RequestPrincipal } from '../common/types/domain.types';
 import { createId, createInviteCode } from '../common/utils/crypto.util';
 import { RealtimeService } from '../realtime/realtime.service';
-import { InMemoryStore } from '../store/in-memory.store';
 import { RoomsService } from '../rooms/rooms.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { JoinInviteDto } from './dto/join-invite.dto';
@@ -16,24 +18,25 @@ import { JoinInviteDto } from './dto/join-invite.dto';
 @Injectable()
 export class InvitesService {
   constructor(
-    private readonly store: InMemoryStore,
+    @InjectModel(MODEL_NAMES.Invite)
+    private readonly inviteModel: Model<InviteDocument>,
     private readonly roomsService: RoomsService,
     private readonly authService: AuthService,
     private readonly realtimeService: RealtimeService,
   ) {}
 
-  createInvite(
+  async createInvite(
     roomId: string,
     principal: RequestPrincipal,
     dto: CreateInviteDto,
-  ): Record<string, unknown> {
-    const creatorMember = this.roomsService.ensureHostMember(roomId, principal);
-    const room = this.roomsService.getRoomById(roomId);
+  ): Promise<Record<string, unknown>> {
+    const creatorMember = await this.roomsService.ensureHostMember(roomId, principal);
+    const room = await this.roomsService.getRoomById(roomId);
 
     const invite = {
       _id: createId(),
       roomId,
-      code: this.createUniqueCode(),
+      code: await this.createUniqueCode(),
       createdByMemberId: creatorMember._id,
       allowGuestJoin: dto.allowGuestJoin ?? room.settings.allowGuestJoin,
       maxUses: dto.maxUses,
@@ -43,7 +46,7 @@ export class InvitesService {
       createdAt: new Date(),
     };
 
-    this.store.invites.set(invite._id, invite);
+    await this.inviteModel.create(invite);
     this.realtimeService.publishRoomUpdate(roomId, 'invite.created', {
       roomId,
       inviteId: invite._id,
@@ -55,12 +58,12 @@ export class InvitesService {
     };
   }
 
-  resolveInvite(code: string): Record<string, unknown> {
-    const invite = this.requireInviteByCode(code);
-    const room = this.roomsService.getRoomById(invite.roomId);
+  async resolveInvite(code: string): Promise<Record<string, unknown>> {
+    const invite = await this.requireInviteByCode(code);
+    const room = await this.roomsService.getRoomById(invite.roomId);
     return {
       invite: {
-        id: invite._id,
+        _id: invite._id,
         code: invite.code,
         allowGuestJoin: invite.allowGuestJoin,
         expiresAt: invite.expiresAt,
@@ -68,20 +71,20 @@ export class InvitesService {
         usesCount: invite.usesCount,
       },
       room: {
-        id: room._id,
+        _id: room._id,
         name: room.name,
         type: room.type,
       },
     };
   }
 
-  joinInvite(
+  async joinInvite(
     code: string,
     dto: JoinInviteDto,
     principal?: RequestPrincipal,
-  ): Record<string, unknown> {
-    const invite = this.requireInviteByCode(code);
-    const room = this.roomsService.getRoomById(invite.roomId);
+  ): Promise<Record<string, unknown>> {
+    const invite = await this.requireInviteByCode(code);
+    const room = await this.roomsService.getRoomById(invite.roomId);
 
     if (invite.maxUses !== undefined && invite.usesCount >= invite.maxUses) {
       throw new BadRequestException({
@@ -91,12 +94,12 @@ export class InvitesService {
       });
     }
 
-    const sanitizedDisplayName = this.getUniqueDisplayName(room._id, dto.displayName.trim());
+    const sanitizedDisplayName = await this.getUniqueDisplayName(room._id, dto.displayName.trim());
     let member;
     let guestToken: string | undefined;
 
     if (principal?.kind === 'user') {
-      member = this.roomsService.createOrReactivateUserMember(
+      member = await this.roomsService.createOrReactivateUserMember(
         room._id,
         principal.userId,
         sanitizedDisplayName,
@@ -110,7 +113,7 @@ export class InvitesService {
         });
       }
       const guestSessionId = createId();
-      member = this.roomsService.createGuestMember(
+      member = await this.roomsService.createGuestMember(
         room._id,
         guestSessionId,
         sanitizedDisplayName,
@@ -118,9 +121,10 @@ export class InvitesService {
       guestToken = this.authService.createGuestToken(member);
     }
 
-    invite.usesCount += 1;
-    this.store.invites.set(invite._id, invite);
-    this.roomsService.touchRoomActivity(room._id);
+    await this.inviteModel
+      .updateOne({ _id: invite._id }, { $inc: { usesCount: 1 } })
+      .exec();
+    await this.roomsService.touchRoomActivity(room._id);
     this.realtimeService.publishRoomUpdate(room._id, 'member.joined', {
       roomId: room._id,
       memberId: member._id,
@@ -130,34 +134,44 @@ export class InvitesService {
     return {
       member,
       guestToken,
-      room: this.roomsService.getRoomById(room._id),
+      room: await this.roomsService.getRoomById(room._id),
     };
   }
 
-  revokeInvite(roomId: string, inviteId: string, principal: RequestPrincipal): Record<string, unknown> {
-    this.roomsService.ensureHostMember(roomId, principal);
-    const invite = this.store.invites.get(inviteId);
-    if (!invite || invite.roomId !== roomId) {
+  async revokeInvite(
+    roomId: string,
+    inviteId: string,
+    principal: RequestPrincipal,
+  ): Promise<Record<string, unknown>> {
+    await this.roomsService.ensureHostMember(roomId, principal);
+    const invite = await this.inviteModel
+      .findOne({ _id: inviteId, roomId })
+      .lean<any>()
+      .exec();
+    if (!invite) {
       throw new NotFoundException({
         code: 'INVITE_NOT_FOUND',
         message: 'Invite was not found.',
         details: {},
       });
     }
-    invite.revokedAt = new Date();
-    this.store.invites.set(invite._id, invite);
+
+    await this.inviteModel
+      .updateOne({ _id: inviteId }, { $set: { revokedAt: new Date() } })
+      .exec();
     this.realtimeService.publishRoomUpdate(roomId, 'invite.revoked', {
       roomId,
       inviteId,
     });
-    return { invite };
+    return { invite: { ...invite, revokedAt: new Date() } };
   }
 
-  private requireInviteByCode(code: string) {
+  private async requireInviteByCode(code: string): Promise<any> {
     const normalizedCode = code.trim().toUpperCase();
-    const invite = [...this.store.invites.values()].find(
-      (candidate) => candidate.code === normalizedCode,
-    );
+    const invite = await this.inviteModel
+      .findOne({ code: normalizedCode })
+      .lean<any>()
+      .exec();
     if (!invite || invite.revokedAt) {
       throw new NotFoundException({
         code: 'INVITE_INVALID',
@@ -175,12 +189,10 @@ export class InvitesService {
     return invite;
   }
 
-  private createUniqueCode(): string {
+  private async createUniqueCode(): Promise<string> {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const code = createInviteCode();
-      const exists = [...this.store.invites.values()].some(
-        (invite) => invite.code === code && !invite.revokedAt,
-      );
+      const exists = await this.inviteModel.exists({ code, revokedAt: { $exists: false } });
       if (!exists) {
         return code;
       }
@@ -188,12 +200,10 @@ export class InvitesService {
     return `${createInviteCode()}${Date.now().toString(36).slice(-2).toUpperCase()}`;
   }
 
-  private getUniqueDisplayName(roomId: string, desiredName: string): string {
+  private async getUniqueDisplayName(roomId: string, desiredName: string): Promise<string> {
     const base = desiredName || 'Guest';
     const activeNames = new Set(
-      this.roomsService
-        .listRoomMembers(roomId)
-        .map((member) => member.displayName.toLowerCase()),
+      (await this.roomsService.listRoomMembers(roomId)).map((member) => member.displayName.toLowerCase()),
     );
     if (!activeNames.has(base.toLowerCase())) {
       return base;

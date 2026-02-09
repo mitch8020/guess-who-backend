@@ -1,0 +1,54 @@
+{
+  "name": "guess-who-backend",
+  "description": "Guess Who backend API (NestJS)",
+  "env": {
+    "MONGODB_URI": {
+      "description": "MongoDB connection string"
+    },
+    "FRONTEND_URL": {
+      "description": "Allowed CORS frontend origin(s), comma-separated for multiple origins"
+    },
+    "GOOGLE_CLIENT_ID": {
+      "description": "Google OAuth client ID"
+    },
+    "GOOGLE_CLIENT_SECRET": {
+      "description": "Google OAuth client secret"
+    },
+    "GOOGLE_CALLBACK_URL": {
+      "description": "OAuth callback URL, e.g. https://<backend-app>.herokuapp.com/api/auth/google/callback"
+    },
+    "JWT_SECRET": {
+      "description": "JWT signing secret"
+    },
+    "JWT_EXPIRES_IN": {
+      "value": "15m"
+    },
+    "REFRESH_EXPIRES_IN": {
+      "value": "30d"
+    },
+    "GUEST_TOKEN_EXPIRES_IN": {
+      "value": "24h"
+    },
+    "TEMP_ROOM_TTL_HOURS": {
+      "value": "24"
+    },
+    "MAX_UPLOAD_MB": {
+      "value": "10"
+    },
+    "MAX_ROOM_PLAYERS_DEFAULT": {
+      "value": "8"
+    },
+    "MAX_ACTIVE_MATCHES_PER_ROOM": {
+      "value": "1"
+    },
+    "ROLLBAR_ACCESS_TOKEN": {
+      "required": false
+    },
+    "ROLLBAR_ENV": {
+      "value": "production"
+    },
+    "ROLLBAR_CODE_VERSION": {
+      "value": "heroku-release"
+    }
+  }
+}

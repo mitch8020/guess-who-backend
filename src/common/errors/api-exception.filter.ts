@@ -43,6 +43,15 @@ export class ApiExceptionFilter implements ExceptionFilter {
       (responseBody?.details as Record<string, unknown> | undefined) ?? {};
 
     if (status >= 500) {
+      const roomId =
+        (request.params?.roomId as string | undefined) ??
+        (request.body?.roomId as string | undefined);
+      const matchId =
+        (request.params?.matchId as string | undefined) ??
+        (request.body?.matchId as string | undefined);
+      const memberId =
+        (request.params?.memberId as string | undefined) ??
+        (request.body?.memberId as string | undefined);
       this.logger.error(
         `${request.method} ${request.url} -> ${status} ${message}`,
         exception instanceof Error ? exception.stack : undefined,
@@ -52,6 +61,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
         method: request.method,
         path: request.url,
         status,
+        roomId,
+        matchId,
+        memberId,
       });
     }
 

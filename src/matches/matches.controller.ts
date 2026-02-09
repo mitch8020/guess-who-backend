@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
@@ -24,7 +25,7 @@ export class MatchesController {
     @Param('roomId') roomId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
     @Body() dto: StartMatchDto,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -35,12 +36,45 @@ export class MatchesController {
     return this.matchesService.startMatch(roomId, principal, dto);
   }
 
+  @Get('history')
+  getHistory(
+    @Param('roomId') roomId: string,
+    @CurrentPrincipal() principal: RequestPrincipal | undefined,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ): Promise<Record<string, unknown>> {
+    if (!principal) {
+      throw new UnauthorizedException({
+        code: 'AUTH_REQUIRED',
+        message: 'A room token is required to view match history.',
+        details: {},
+      });
+    }
+    return this.matchesService.listRoomHistory(roomId, principal, cursor, Number(limit ?? 20));
+  }
+
+  @Get(':matchId/replay')
+  getReplay(
+    @Param('roomId') roomId: string,
+    @Param('matchId') matchId: string,
+    @CurrentPrincipal() principal: RequestPrincipal | undefined,
+  ): Promise<Record<string, unknown>> {
+    if (!principal) {
+      throw new UnauthorizedException({
+        code: 'AUTH_REQUIRED',
+        message: 'A room token is required to view match replay.',
+        details: {},
+      });
+    }
+    return this.matchesService.getReplay(roomId, matchId, principal);
+  }
+
   @Get(':matchId')
   getMatch(
     @Param('roomId') roomId: string,
     @Param('matchId') matchId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -57,7 +91,7 @@ export class MatchesController {
     @Param('matchId') matchId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
     @Body() dto: SubmitActionDto,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -73,7 +107,7 @@ export class MatchesController {
     @Param('roomId') roomId: string,
     @Param('matchId') matchId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -90,7 +124,7 @@ export class MatchesController {
     @Param('matchId') matchId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
     @Body() dto: RematchDto,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',

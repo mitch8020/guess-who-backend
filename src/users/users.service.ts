@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { MODEL_NAMES, UserDocument } from '../common/schemas/persistence.schemas';
 import { UserRecord } from '../common/types/domain.types';
 import { createId } from '../common/utils/crypto.util';
-import { InMemoryStore } from '../store/in-memory.store';
 
 interface UpsertUserInput {
   googleId: string;
@@ -12,26 +14,36 @@ interface UpsertUserInput {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly store: InMemoryStore) {}
+  constructor(
+    @InjectModel(MODEL_NAMES.User)
+    private readonly userModel: Model<UserDocument>,
+  ) {}
 
-  findById(userId: string): UserRecord | undefined {
-    return this.store.users.get(userId);
+  async findById(userId: string): Promise<UserRecord | undefined> {
+    const user = await this.userModel.findById(userId).lean<UserRecord>().exec();
+    return user ?? undefined;
   }
 
-  findByEmail(email: string): UserRecord | undefined {
+  async findByEmail(email: string): Promise<UserRecord | undefined> {
     const normalizedEmail = email.toLowerCase();
-    return [...this.store.users.values()].find(
-      (user) => user.email.toLowerCase() === normalizedEmail,
-    );
+    const user = await this.userModel
+      .findOne({ email: normalizedEmail })
+      .lean<UserRecord>()
+      .exec();
+    return user ?? undefined;
   }
 
-  findByGoogleId(googleId: string): UserRecord | undefined {
-    return [...this.store.users.values()].find((user) => user.googleId === googleId);
+  async findByGoogleId(googleId: string): Promise<UserRecord | undefined> {
+    const user = await this.userModel
+      .findOne({ googleId })
+      .lean<UserRecord>()
+      .exec();
+    return user ?? undefined;
   }
 
-  upsertGoogleUser(input: UpsertUserInput): UserRecord {
+  async upsertGoogleUser(input: UpsertUserInput): Promise<UserRecord> {
     const now = new Date();
-    const existingByGoogle = this.findByGoogleId(input.googleId);
+    const existingByGoogle = await this.findByGoogleId(input.googleId);
     if (existingByGoogle) {
       const updatedUser: UserRecord = {
         ...existingByGoogle,
@@ -41,7 +53,9 @@ export class UsersService {
         lastLoginAt: now,
         updatedAt: now,
       };
-      this.store.users.set(updatedUser._id, updatedUser);
+      await this.userModel
+        .findByIdAndUpdate(updatedUser._id, updatedUser, { new: true })
+        .exec();
       return updatedUser;
     }
 
@@ -57,7 +71,7 @@ export class UsersService {
       lastLoginAt: now,
     };
 
-    this.store.users.set(createdUser._id, createdUser);
+    await this.userModel.create(createdUser);
     return createdUser;
   }
 }

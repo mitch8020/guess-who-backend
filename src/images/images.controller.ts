@@ -1,7 +1,9 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Post,
   UnauthorizedException,
@@ -14,6 +16,7 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentPrincipal } from '../common/decorators/current-principal.decorator';
 import { PlayerTokenGuard } from '../common/guards/player-token.guard';
 import { RequestPrincipal } from '../common/types/domain.types';
+import { BulkRemoveImagesDto } from './dto/bulk-remove-images.dto';
 import { ImagesService } from './images.service';
 
 @Controller('rooms/:roomId/images')
@@ -32,7 +35,7 @@ export class ImagesController {
     @Param('roomId') roomId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
     @UploadedFile() file: Express.Multer.File | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -40,14 +43,16 @@ export class ImagesController {
         details: {},
       });
     }
-    return { image: this.imagesService.uploadImage(roomId, principal, file) };
+    return this.imagesService
+      .uploadImage(roomId, principal, file)
+      .then((image) => ({ image }));
   }
 
   @Get()
   list(
     @Param('roomId') roomId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -59,11 +64,11 @@ export class ImagesController {
   }
 
   @Delete(':imageId')
-  remove(
+  async remove(
     @Param('roomId') roomId: string,
     @Param('imageId') imageId: string,
     @CurrentPrincipal() principal: RequestPrincipal | undefined,
-  ): void {
+  ): Promise<void> {
     if (!principal) {
       throw new UnauthorizedException({
         code: 'AUTH_REQUIRED',
@@ -71,6 +76,24 @@ export class ImagesController {
         details: {},
       });
     }
-    this.imagesService.deleteImage(roomId, imageId, principal);
+    await this.imagesService.deleteImage(roomId, imageId, principal);
+  }
+
+  @Post('bulk-remove')
+  @HttpCode(200)
+  bulkRemove(
+    @Param('roomId') roomId: string,
+    @CurrentPrincipal() principal: RequestPrincipal | undefined,
+    @Body() dto: BulkRemoveImagesDto,
+  ): Promise<Record<string, unknown>> {
+    if (!principal) {
+      throw new UnauthorizedException({
+        code: 'AUTH_REQUIRED',
+        message: 'A room token is required for bulk image removal.',
+        details: {},
+      });
+    }
+
+    return this.imagesService.bulkRemoveImages(roomId, principal, dto.imageIds);
   }
 }

@@ -6,8 +6,19 @@ import { API_PREFIX } from './common/constants';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  const frontendOrigins = (process.env.FRONTEND_URL ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
   const app = await NestFactory.create(AppModule, {
-    cors: true,
+    cors:
+      frontendOrigins.length > 0
+        ? {
+            origin: frontendOrigins,
+            credentials: true,
+          }
+        : true,
   });
   app.setGlobalPrefix(API_PREFIX);
   app.use(

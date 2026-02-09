@@ -36,6 +36,20 @@ export class UpdateRoomSettingsDto {
   @IsOptional()
   @IsBoolean()
   allowGuestJoin?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(4)
+  @Max(10)
+  defaultBoardSize?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsInt({ each: true })
+  @Min(4, { each: true })
+  @Max(10, { each: true })
+  rematchBoardSizes?: number[];
 }
 
 export class UpdateRoomDto {
