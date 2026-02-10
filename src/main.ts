@@ -42,7 +42,7 @@ async function bootstrap() {
     }),
   );
 
-  const port = Number(process.env.PORT ?? 3001);
+  const port = Number(process.env.PORT ?? 1000);
   await app.listen(port);
   Logger.log(`Guess Who backend listening on port ${port}`, 'Bootstrap');
 }

@@ -22,6 +22,7 @@ import { UsersModule } from './users/users.module';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
+      envFilePath: ['.env.dev', '.env'],
     }),
     ScheduleModule.forRoot(),
     MongooseModule.forRootAsync({

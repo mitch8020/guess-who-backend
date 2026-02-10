@@ -37,17 +37,17 @@ Planned domain modules:
 npm install
 ```
 
-2. Create `.env` in this directory:
+2. Create `.env.dev` in this directory:
 
 ```env
-PORT=3001
+PORT=1000
 MONGODB_URI=mongodb://localhost:27017/guess-who
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_CALLBACK_URL=http://localhost:3001/api/auth/google/callback
+GOOGLE_CALLBACK_URL=http://localhost:1000/api/auth/google/callback
 JWT_SECRET=replace_with_secure_secret
 JWT_EXPIRES_IN=15m
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:1073
 ROLLBAR_ACCESS_TOKEN=your_rollbar_server_token
 ROLLBAR_ENV=development
 TEMP_ROOM_TTL_HOURS=24
