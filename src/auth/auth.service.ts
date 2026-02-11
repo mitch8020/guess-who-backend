@@ -60,7 +60,9 @@ export class AuthService {
     }
   }
 
-  async createOAuthStart(redirectTo?: string): Promise<{ url: string; state: string; expiresAt: Date }> {
+  async createOAuthStart(
+    redirectTo?: string,
+  ): Promise<{ url: string; state: string; expiresAt: Date }> {
     const state = createRandomHex(16);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     const allowedFrontendOrigin = this.configService.get<string>(
@@ -187,7 +189,10 @@ export class AuthService {
     };
     return this.jwtService.sign(payload, {
       secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
-      expiresIn: this.configService.get<string>('GUEST_TOKEN_EXPIRES_IN', '24h') as any,
+      expiresIn: this.configService.get<string>(
+        'GUEST_TOKEN_EXPIRES_IN',
+        '24h',
+      ) as any,
     });
   }
 
@@ -231,7 +236,9 @@ export class AuthService {
     }
   }
 
-  getOptionalPrincipal(authorizationHeader: unknown): RequestPrincipal | undefined {
+  getOptionalPrincipal(
+    authorizationHeader: unknown,
+  ): RequestPrincipal | undefined {
     const token = this.extractBearerToken(authorizationHeader);
     if (!token) {
       return undefined;
@@ -289,7 +296,9 @@ export class AuthService {
     return url.toString();
   }
 
-  private async resolveGoogleProfile(dto: OAuthCallbackDto): Promise<GoogleProfile> {
+  private async resolveGoogleProfile(
+    dto: OAuthCallbackDto,
+  ): Promise<GoogleProfile> {
     if (dto.code && this.oauthClient) {
       const tokenResponse = await this.oauthClient.getToken(dto.code);
       const idToken = tokenResponse.tokens.id_token;
@@ -341,8 +350,14 @@ export class AuthService {
     accessToken: string;
     refreshToken: string;
   }> {
-    const jwtSecret = this.configService.get<string>('JWT_SECRET', 'dev-secret');
-    const accessExpiresIn = this.configService.get<string>('JWT_EXPIRES_IN', '15m');
+    const jwtSecret = this.configService.get<string>(
+      'JWT_SECRET',
+      'dev-secret',
+    );
+    const accessExpiresIn = this.configService.get<string>(
+      'JWT_EXPIRES_IN',
+      '15m',
+    );
     const refreshExpiresIn = this.configService.get<string>(
       'REFRESH_EXPIRES_IN',
       '30d',
@@ -371,7 +386,9 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async verifyRefreshSession(refreshToken: string): Promise<RefreshSessionRecord> {
+  private async verifyRefreshSession(
+    refreshToken: string,
+  ): Promise<RefreshSessionRecord> {
     try {
       const payload = this.jwtService.verify<{
         type: string;

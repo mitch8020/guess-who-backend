@@ -13,8 +13,14 @@ import {
   MAX_UPLOAD_MB,
 } from '../common/constants';
 import { GridFsService } from '../common/persistence/gridfs.service';
-import { MODEL_NAMES, RoomImageDocument } from '../common/schemas/persistence.schemas';
-import { RequestPrincipal, RoomImageRecord } from '../common/types/domain.types';
+import {
+  MODEL_NAMES,
+  RoomImageDocument,
+} from '../common/schemas/persistence.schemas';
+import {
+  RequestPrincipal,
+  RoomImageRecord,
+} from '../common/types/domain.types';
 import { sha256, createId } from '../common/utils/crypto.util';
 import { detectImageMimeType } from '../common/utils/image-signature.util';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -52,7 +58,10 @@ export class ImagesService {
     }
 
     await this.roomsService.getRoomById(roomId);
-    const member = await this.roomsService.ensureActiveMember(roomId, principal);
+    const member = await this.roomsService.ensureActiveMember(
+      roomId,
+      principal,
+    );
 
     const detectedMime = detectImageMimeType(file.buffer);
     if (!detectedMime || !ALLOWED_IMAGE_MIME_TYPES.has(detectedMime)) {
@@ -86,10 +95,15 @@ export class ImagesService {
     }
 
     const dimensions = imageSize(file.buffer);
-    const storageFileId = await this.gridFsService.uploadBuffer(file.buffer, file.originalname, file.mimetype, {
-      roomId,
-      uploaderMemberId: member._id,
-    });
+    const storageFileId = await this.gridFsService.uploadBuffer(
+      file.buffer,
+      file.originalname,
+      file.mimetype,
+      {
+        roomId,
+        uploaderMemberId: member._id,
+      },
+    );
 
     const imageRecord: RoomImageRecord = {
       _id: createId(),
@@ -138,9 +152,16 @@ export class ImagesService {
     };
   }
 
-  async deleteImage(roomId: string, imageId: string, principal: RequestPrincipal): Promise<void> {
+  async deleteImage(
+    roomId: string,
+    imageId: string,
+    principal: RequestPrincipal,
+  ): Promise<void> {
     await this.roomsService.getRoomById(roomId);
-    const member = await this.roomsService.ensureActiveMember(roomId, principal);
+    const member = await this.roomsService.ensureActiveMember(
+      roomId,
+      principal,
+    );
     const image = await this.roomImageModel
       .findById(imageId)
       .lean<RoomImageRecord>()
@@ -197,7 +218,9 @@ export class ImagesService {
       .updateMany({ _id: { $in: resolvedIds } }, { $set: { isActive: false } })
       .exec();
 
-    await Promise.all(images.map((image) => this.gridFsService.deleteById(image.storageFileId)));
+    await Promise.all(
+      images.map((image) => this.gridFsService.deleteById(image.storageFileId)),
+    );
 
     this.realtimeService.publishRoomUpdate(roomId, 'images.bulk_removed', {
       roomId,

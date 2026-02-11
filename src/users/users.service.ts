@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MODEL_NAMES, UserDocument } from '../common/schemas/persistence.schemas';
+import {
+  MODEL_NAMES,
+  UserDocument,
+} from '../common/schemas/persistence.schemas';
 import { UserRecord } from '../common/types/domain.types';
 import { createId } from '../common/utils/crypto.util';
 
@@ -20,7 +23,10 @@ export class UsersService {
   ) {}
 
   async findById(userId: string): Promise<UserRecord | undefined> {
-    const user = await this.userModel.findById(userId).lean<UserRecord>().exec();
+    const user = await this.userModel
+      .findById(userId)
+      .lean<UserRecord>()
+      .exec();
     return user ?? undefined;
   }
 

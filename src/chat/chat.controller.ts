@@ -34,7 +34,12 @@ export class ChatController {
       });
     }
 
-    return this.chatService.listMessages(roomId, principal, cursor, Number(limit ?? 50));
+    return this.chatService.listMessages(
+      roomId,
+      principal,
+      cursor,
+      Number(limit ?? 50),
+    );
   }
 
   @Post()

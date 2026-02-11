@@ -8,7 +8,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MAX_ACTIVE_MATCHES_PER_ROOM, ROOM_DEFAULTS } from '../common/constants';
+import {
+  MAX_ACTIVE_MATCHES_PER_ROOM,
+  ROOM_DEFAULTS,
+} from '../common/constants';
 import {
   MatchDocument,
   MODEL_NAMES,
@@ -40,11 +43,17 @@ export class RoomsService {
     configService: ConfigService,
   ) {
     this.temporaryRoomTtlHours = Number(
-      configService.get<string>('TEMP_ROOM_TTL_HOURS', String(ROOM_DEFAULTS.temporaryTtlHours)),
+      configService.get<string>(
+        'TEMP_ROOM_TTL_HOURS',
+        String(ROOM_DEFAULTS.temporaryTtlHours),
+      ),
     );
   }
 
-  async createRoom(hostUserId: string, dto: CreateRoomDto): Promise<{
+  async createRoom(
+    hostUserId: string,
+    dto: CreateRoomDto,
+  ): Promise<{
     room: RoomRecord;
     hostMember: RoomMemberRecord;
   }> {
@@ -102,7 +111,10 @@ export class RoomsService {
   }
 
   async getRoomById(roomId: string): Promise<RoomRecord> {
-    const room = await this.roomModel.findById(roomId).lean<RoomRecord>().exec();
+    const room = await this.roomModel
+      .findById(roomId)
+      .lean<RoomRecord>()
+      .exec();
     if (!room || room.isArchived) {
       throw new NotFoundException({
         code: 'ROOM_NOT_FOUND',
@@ -123,7 +135,11 @@ export class RoomsService {
     return { room, member, members };
   }
 
-  async updateRoom(roomId: string, hostUserId: string, dto: UpdateRoomDto): Promise<RoomRecord> {
+  async updateRoom(
+    roomId: string,
+    hostUserId: string,
+    dto: UpdateRoomDto,
+  ): Promise<RoomRecord> {
     const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
 
@@ -159,7 +175,10 @@ export class RoomsService {
     }
 
     await this.roomModel
-      .updateOne({ _id: roomId }, { $set: { isArchived: true, updatedAt: new Date() } })
+      .updateOne(
+        { _id: roomId },
+        { $set: { isArchived: true, updatedAt: new Date() } },
+      )
       .exec();
   }
 
@@ -231,7 +250,11 @@ export class RoomsService {
     return member;
   }
 
-  async unmuteMember(roomId: string, hostUserId: string, memberId: string): Promise<RoomMemberRecord> {
+  async unmuteMember(
+    roomId: string,
+    hostUserId: string,
+    memberId: string,
+  ): Promise<RoomMemberRecord> {
     const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
     const member = await this.roomMemberModel
@@ -262,7 +285,10 @@ export class RoomsService {
       .exec();
   }
 
-  async ensureActiveMember(roomId: string, principal: RequestPrincipal): Promise<RoomMemberRecord> {
+  async ensureActiveMember(
+    roomId: string,
+    principal: RequestPrincipal,
+  ): Promise<RoomMemberRecord> {
     const member =
       principal.kind === 'user'
         ? await this.roomMemberModel
@@ -289,7 +315,10 @@ export class RoomsService {
     return member;
   }
 
-  async ensureHostMember(roomId: string, principal: RequestPrincipal): Promise<RoomMemberRecord> {
+  async ensureHostMember(
+    roomId: string,
+    principal: RequestPrincipal,
+  ): Promise<RoomMemberRecord> {
     const member = await this.ensureActiveMember(roomId, principal);
     if (member.role !== 'host') {
       throw new ForbiddenException({
@@ -316,7 +345,10 @@ export class RoomsService {
   }
 
   async touchRoomActivity(roomId: string): Promise<void> {
-    const room = await this.roomModel.findById(roomId).lean<RoomRecord>().exec();
+    const room = await this.roomModel
+      .findById(roomId)
+      .lean<RoomRecord>()
+      .exec();
     if (!room || room.isArchived) {
       return;
     }
@@ -326,7 +358,9 @@ export class RoomsService {
       updatedAt: now,
     };
     if (room.type === 'temporary') {
-      updates.temporaryExpiresAt = new Date(now.getTime() + this.temporaryRoomTtlHours * 3_600_000);
+      updates.temporaryExpiresAt = new Date(
+        now.getTime() + this.temporaryRoomTtlHours * 3_600_000,
+      );
     }
 
     await this.roomModel.updateOne({ _id: roomId }, { $set: updates }).exec();
@@ -426,7 +460,9 @@ export class RoomsService {
     }
   }
 
-  private normalizeRoomSettings(settings?: Partial<RoomSettings>): RoomSettings {
+  private normalizeRoomSettings(
+    settings?: Partial<RoomSettings>,
+  ): RoomSettings {
     const allowedBoardSizes =
       settings?.allowedBoardSizes && settings.allowedBoardSizes.length > 0
         ? [...new Set(settings.allowedBoardSizes)].sort((a, b) => a - b)
@@ -455,7 +491,9 @@ export class RoomsService {
         defaultBoardSize && allowedBoardSizes.includes(defaultBoardSize)
           ? defaultBoardSize
           : undefined,
-      rematchBoardSizes: rematchBoardSizes.filter((size) => allowedBoardSizes.includes(size)),
+      rematchBoardSizes: rematchBoardSizes.filter((size) =>
+        allowedBoardSizes.includes(size),
+      ),
     };
   }
 }

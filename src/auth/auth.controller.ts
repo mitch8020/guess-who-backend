@@ -62,8 +62,12 @@ export class AuthController {
     @Headers('authorization') authorizationHeader: string | undefined,
     @Res({ passthrough: true }) response: Response,
   ): Promise<Record<string, unknown>> {
-    const tokenFromHeader = this.authService.extractBearerToken(authorizationHeader);
-    const refreshToken = body.refreshToken ?? tokenFromHeader ?? response.req.cookies?.refreshToken;
+    const tokenFromHeader =
+      this.authService.extractBearerToken(authorizationHeader);
+    const refreshToken =
+      body.refreshToken ??
+      tokenFromHeader ??
+      response.req.cookies?.refreshToken;
     if (!refreshToken) {
       throw new UnauthorizedException({
         code: 'REFRESH_TOKEN_REQUIRED',
@@ -87,8 +91,12 @@ export class AuthController {
     @Headers('authorization') authorizationHeader: string | undefined,
     @Res({ passthrough: true }) response: Response,
   ): Promise<void> {
-    const tokenFromHeader = this.authService.extractBearerToken(authorizationHeader);
-    const refreshToken = body.refreshToken ?? tokenFromHeader ?? response.req.cookies?.refreshToken;
+    const tokenFromHeader =
+      this.authService.extractBearerToken(authorizationHeader);
+    const refreshToken =
+      body.refreshToken ??
+      tokenFromHeader ??
+      response.req.cookies?.refreshToken;
     if (refreshToken) {
       await this.authService.logout(refreshToken);
     }

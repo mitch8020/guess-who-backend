@@ -7,7 +7,10 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { AuthService } from '../auth/auth.service';
-import { InviteDocument, MODEL_NAMES } from '../common/schemas/persistence.schemas';
+import {
+  InviteDocument,
+  MODEL_NAMES,
+} from '../common/schemas/persistence.schemas';
 import { RequestPrincipal } from '../common/types/domain.types';
 import { createId, createInviteCode } from '../common/utils/crypto.util';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -30,7 +33,10 @@ export class InvitesService {
     principal: RequestPrincipal,
     dto: CreateInviteDto,
   ): Promise<Record<string, unknown>> {
-    const creatorMember = await this.roomsService.ensureHostMember(roomId, principal);
+    const creatorMember = await this.roomsService.ensureHostMember(
+      roomId,
+      principal,
+    );
     const room = await this.roomsService.getRoomById(roomId);
 
     const invite = {
@@ -94,7 +100,10 @@ export class InvitesService {
       });
     }
 
-    const sanitizedDisplayName = await this.getUniqueDisplayName(room._id, dto.displayName.trim());
+    const sanitizedDisplayName = await this.getUniqueDisplayName(
+      room._id,
+      dto.displayName.trim(),
+    );
     let member;
     let guestToken: string | undefined;
 
@@ -192,7 +201,10 @@ export class InvitesService {
   private async createUniqueCode(): Promise<string> {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const code = createInviteCode();
-      const exists = await this.inviteModel.exists({ code, revokedAt: { $exists: false } });
+      const exists = await this.inviteModel.exists({
+        code,
+        revokedAt: { $exists: false },
+      });
       if (!exists) {
         return code;
       }
@@ -200,10 +212,15 @@ export class InvitesService {
     return `${createInviteCode()}${Date.now().toString(36).slice(-2).toUpperCase()}`;
   }
 
-  private async getUniqueDisplayName(roomId: string, desiredName: string): Promise<string> {
+  private async getUniqueDisplayName(
+    roomId: string,
+    desiredName: string,
+  ): Promise<string> {
     const base = desiredName || 'Guest';
     const activeNames = new Set(
-      (await this.roomsService.listRoomMembers(roomId)).map((member) => member.displayName.toLowerCase()),
+      (await this.roomsService.listRoomMembers(roomId)).map((member) =>
+        member.displayName.toLowerCase(),
+      ),
     );
     if (!activeNames.has(base.toLowerCase())) {
       return base;

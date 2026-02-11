@@ -54,7 +54,8 @@ export class InvitesController {
     @Body() dto: JoinInviteDto,
     @Headers('authorization') authorizationHeader: string | undefined,
   ): Promise<Record<string, unknown>> {
-    const headerPrincipal = this.authService.getOptionalPrincipal(authorizationHeader);
+    const headerPrincipal =
+      this.authService.getOptionalPrincipal(authorizationHeader);
     const bodyPrincipal = dto.authToken
       ? this.authService.getOptionalPrincipal(`Bearer ${dto.authToken}`)
       : undefined;

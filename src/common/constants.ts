@@ -9,7 +9,9 @@ export const ROOM_DEFAULTS = {
 } as const;
 
 export const MATCH_MIN_IMAGES = 16;
-export const MAX_ACTIVE_MATCHES_PER_ROOM = Number(process.env.MAX_ACTIVE_MATCHES_PER_ROOM ?? 1);
+export const MAX_ACTIVE_MATCHES_PER_ROOM = Number(
+  process.env.MAX_ACTIVE_MATCHES_PER_ROOM ?? 1,
+);
 export const INVITE_CODE_LENGTH = 8;
 export const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB ?? 10);
 

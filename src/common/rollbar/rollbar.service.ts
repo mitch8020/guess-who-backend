@@ -16,7 +16,10 @@ export class RollbarService {
     this.client = new Rollbar({
       accessToken,
       environment: this.configService.get<string>('ROLLBAR_ENV', 'development'),
-      codeVersion: this.configService.get<string>('ROLLBAR_CODE_VERSION', 'dev'),
+      codeVersion: this.configService.get<string>(
+        'ROLLBAR_CODE_VERSION',
+        'dev',
+      ),
       captureUncaught: true,
       captureUnhandledRejections: true,
       payload: {
@@ -37,7 +40,9 @@ export class RollbarService {
     try {
       this.client.error(error as Error, this.sanitizeContext(context));
     } catch (reportingError) {
-      this.logger.warn(`Failed to report Rollbar error: ${String(reportingError)}`);
+      this.logger.warn(
+        `Failed to report Rollbar error: ${String(reportingError)}`,
+      );
     }
   }
 
@@ -48,7 +53,9 @@ export class RollbarService {
     try {
       this.client.info(message, this.sanitizeContext(context));
     } catch (reportingError) {
-      this.logger.warn(`Failed to report Rollbar info: ${String(reportingError)}`);
+      this.logger.warn(
+        `Failed to report Rollbar info: ${String(reportingError)}`,
+      );
     }
   }
 

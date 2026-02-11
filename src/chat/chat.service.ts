@@ -1,11 +1,14 @@
-import {
-  BadRequestException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MODEL_NAMES, ChatMessageDocument } from '../common/schemas/persistence.schemas';
-import { ChatMessageRecord, RequestPrincipal } from '../common/types/domain.types';
+import {
+  MODEL_NAMES,
+  ChatMessageDocument,
+} from '../common/schemas/persistence.schemas';
+import {
+  ChatMessageRecord,
+  RequestPrincipal,
+} from '../common/types/domain.types';
 import { createId } from '../common/utils/crypto.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RoomsService } from '../rooms/rooms.service';
@@ -51,7 +54,10 @@ export class ChatService {
     principal: RequestPrincipal,
     dto: CreateChatMessageDto,
   ): Promise<{ message: ChatMessageRecord }> {
-    const member = await this.roomsService.ensureActiveMember(roomId, principal);
+    const member = await this.roomsService.ensureActiveMember(
+      roomId,
+      principal,
+    );
     if (member.mutedUntil && member.mutedUntil.getTime() > Date.now()) {
       throw new BadRequestException({
         code: 'CHAT_MEMBER_MUTED',

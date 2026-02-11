@@ -7,7 +7,12 @@ export type MatchParticipantResult =
   | 'guessed_correct'
   | 'guessed_wrong'
   | 'timeout';
-export type MatchActionType = 'ask' | 'answer' | 'eliminate' | 'guess' | 'system';
+export type MatchActionType =
+  | 'ask'
+  | 'answer'
+  | 'eliminate'
+  | 'guess'
+  | 'system';
 
 export interface UserRecord {
   _id: string;

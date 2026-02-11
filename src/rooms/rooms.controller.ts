@@ -56,7 +56,9 @@ export class RoomsController {
         details: {},
       });
     }
-    return { rooms: await this.roomsService.listRoomsForUser(principal.userId) };
+    return {
+      rooms: await this.roomsService.listRoomsForUser(principal.userId),
+    };
   }
 
   @Get(':roomId')
@@ -89,7 +91,9 @@ export class RoomsController {
         details: {},
       });
     }
-    return { room: await this.roomsService.updateRoom(roomId, principal.userId, dto) };
+    return {
+      room: await this.roomsService.updateRoom(roomId, principal.userId, dto),
+    };
   }
 
   @Delete(':roomId')
@@ -123,7 +127,11 @@ export class RoomsController {
       });
     }
     return {
-      members: await this.roomsService.removeMember(roomId, principal.userId, dto),
+      members: await this.roomsService.removeMember(
+        roomId,
+        principal.userId,
+        dto,
+      ),
     };
   }
 
@@ -145,7 +153,12 @@ export class RoomsController {
     }
 
     const mutedUntil = new Date(Date.now() + dto.durationMinutes * 60_000);
-    const member = await this.roomsService.muteMember(roomId, principal.userId, memberId, mutedUntil);
+    const member = await this.roomsService.muteMember(
+      roomId,
+      principal.userId,
+      memberId,
+      mutedUntil,
+    );
     this.realtimeService.publishRoomUpdate(roomId, 'member.muted', {
       roomId,
       memberId,
@@ -170,7 +183,11 @@ export class RoomsController {
       });
     }
 
-    const member = await this.roomsService.unmuteMember(roomId, principal.userId, memberId);
+    const member = await this.roomsService.unmuteMember(
+      roomId,
+      principal.userId,
+      memberId,
+    );
     this.realtimeService.publishRoomUpdate(roomId, 'member.unmuted', {
       roomId,
       memberId,

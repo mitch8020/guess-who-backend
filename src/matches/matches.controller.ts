@@ -50,7 +50,12 @@ export class MatchesController {
         details: {},
       });
     }
-    return this.matchesService.listRoomHistory(roomId, principal, cursor, Number(limit ?? 20));
+    return this.matchesService.listRoomHistory(
+      roomId,
+      principal,
+      cursor,
+      Number(limit ?? 20),
+    );
   }
 
   @Get(':matchId/replay')

@@ -27,7 +27,9 @@ interface SocketState {
     credentials: true,
   },
 })
-export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class RealtimeGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server!: Server;
 
@@ -46,7 +48,9 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     try {
       const token =
         this.extractSocketToken(client) ??
-        this.authService.extractBearerToken(client.handshake.headers.authorization);
+        this.authService.extractBearerToken(
+          client.handshake.headers.authorization,
+        );
       if (!token) {
         client.disconnect(true);
         return;
@@ -84,8 +88,14 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     state.joinedRoomIds.add(payload.roomId);
     client.join(`room:${payload.roomId}:presence`);
     client.join(`room:${payload.roomId}:updates`);
-    this.emitRoomPresence(payload.roomId, this.buildRoomPresence(payload.roomId));
-    const snapshot = await this.roomsService.getRoomDetailForPrincipal(payload.roomId, state.principal);
+    this.emitRoomPresence(
+      payload.roomId,
+      this.buildRoomPresence(payload.roomId),
+    );
+    const snapshot = await this.roomsService.getRoomDetailForPrincipal(
+      payload.roomId,
+      state.principal,
+    );
     return { ok: true, snapshot };
   }
 
@@ -105,11 +115,19 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.server.to(`room:${roomId}:presence`).emit('presence.updated', payload);
   }
 
-  emitRoomUpdate(roomId: string, event: string, payload: Record<string, unknown>): void {
+  emitRoomUpdate(
+    roomId: string,
+    event: string,
+    payload: Record<string, unknown>,
+  ): void {
     this.server.to(`room:${roomId}:updates`).emit(event, payload);
   }
 
-  emitMatchState(matchId: string, event: string, payload: Record<string, unknown>): void {
+  emitMatchState(
+    matchId: string,
+    event: string,
+    payload: Record<string, unknown>,
+  ): void {
     this.server.to(`match:${matchId}:state`).emit(event, payload);
   }
 

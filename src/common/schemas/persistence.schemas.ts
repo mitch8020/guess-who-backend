@@ -35,7 +35,8 @@ export class RoomSettingsDocument {
   rematchBoardSizes!: number[];
 }
 
-export const RoomSettingsSchema = SchemaFactory.createForClass(RoomSettingsDocument);
+export const RoomSettingsSchema =
+  SchemaFactory.createForClass(RoomSettingsDocument);
 
 @Schema({ collection: 'users', versionKey: false })
 export class UserDocument {
@@ -118,7 +119,11 @@ export class RoomMemberDocument {
   @Prop({ required: true, enum: ['host', 'player'] })
   role!: 'host' | 'player';
 
-  @Prop({ required: true, enum: ['active', 'left', 'kicked'], default: 'active' })
+  @Prop({
+    required: true,
+    enum: ['active', 'left', 'kicked'],
+    default: 'active',
+  })
   status!: 'active' | 'left' | 'kicked';
 
   @Prop()
@@ -131,14 +136,23 @@ export class RoomMemberDocument {
   lastSeenAt!: Date;
 }
 
-export const RoomMemberSchema = SchemaFactory.createForClass(RoomMemberDocument);
+export const RoomMemberSchema =
+  SchemaFactory.createForClass(RoomMemberDocument);
 RoomMemberSchema.index(
   { roomId: 1, userId: 1 },
-  { unique: true, partialFilterExpression: { userId: { $exists: true, $type: 'string' } } },
+  {
+    unique: true,
+    partialFilterExpression: { userId: { $exists: true, $type: 'string' } },
+  },
 );
 RoomMemberSchema.index(
   { roomId: 1, guestSessionId: 1 },
-  { unique: true, partialFilterExpression: { guestSessionId: { $exists: true, $type: 'string' } } },
+  {
+    unique: true,
+    partialFilterExpression: {
+      guestSessionId: { $exists: true, $type: 'string' },
+    },
+  },
 );
 
 @Schema({ collection: 'room_images', versionKey: false })
@@ -223,7 +237,10 @@ export class MatchDocument {
   @Prop({ required: true, index: true })
   roomId!: string;
 
-  @Prop({ required: true, enum: ['waiting', 'in_progress', 'completed', 'cancelled'] })
+  @Prop({
+    required: true,
+    enum: ['waiting', 'in_progress', 'completed', 'cancelled'],
+  })
   status!: 'waiting' | 'in_progress' | 'completed' | 'cancelled';
 
   @Prop({ required: true })
@@ -278,7 +295,10 @@ export class MatchParticipantDocument {
   @Prop({ required: true, type: [String], default: [] })
   eliminatedImageIds!: string[];
 
-  @Prop({ required: true, enum: ['in_progress', 'guessed_correct', 'guessed_wrong', 'timeout'] })
+  @Prop({
+    required: true,
+    enum: ['in_progress', 'guessed_correct', 'guessed_wrong', 'timeout'],
+  })
   result!: 'in_progress' | 'guessed_correct' | 'guessed_wrong' | 'timeout';
 
   @Prop({ required: true })
@@ -288,7 +308,9 @@ export class MatchParticipantDocument {
   lastActionAt!: Date;
 }
 
-export const MatchParticipantSchema = SchemaFactory.createForClass(MatchParticipantDocument);
+export const MatchParticipantSchema = SchemaFactory.createForClass(
+  MatchParticipantDocument,
+);
 MatchParticipantSchema.index({ matchId: 1, roomMemberId: 1 }, { unique: true });
 MatchParticipantSchema.index({ matchId: 1, result: 1 });
 
@@ -300,7 +322,10 @@ export class MatchActionDocument {
   @Prop()
   actorMemberId?: string;
 
-  @Prop({ required: true, enum: ['ask', 'answer', 'eliminate', 'guess', 'system'] })
+  @Prop({
+    required: true,
+    enum: ['ask', 'answer', 'eliminate', 'guess', 'system'],
+  })
   actionType!: 'ask' | 'answer' | 'eliminate' | 'guess' | 'system';
 
   @Prop({ required: true, type: Object })
@@ -310,7 +335,8 @@ export class MatchActionDocument {
   createdAt!: Date;
 }
 
-export const MatchActionSchema = SchemaFactory.createForClass(MatchActionDocument);
+export const MatchActionSchema =
+  SchemaFactory.createForClass(MatchActionDocument);
 MatchActionSchema.index({ matchId: 1, createdAt: 1 });
 
 @Schema({ collection: 'refresh_sessions', versionKey: false })
@@ -331,7 +357,9 @@ export class RefreshSessionDocument {
   revokedAt?: Date;
 }
 
-export const RefreshSessionSchema = SchemaFactory.createForClass(RefreshSessionDocument);
+export const RefreshSessionSchema = SchemaFactory.createForClass(
+  RefreshSessionDocument,
+);
 
 @Schema({ collection: 'oauth_states', versionKey: false })
 export class OAuthStateDocument {
@@ -348,7 +376,8 @@ export class OAuthStateDocument {
   redirectTo?: string;
 }
 
-export const OAuthStateSchema = SchemaFactory.createForClass(OAuthStateDocument);
+export const OAuthStateSchema =
+  SchemaFactory.createForClass(OAuthStateDocument);
 
 @Schema({ collection: 'chat_messages', versionKey: false })
 export class ChatMessageDocument {
@@ -365,7 +394,8 @@ export class ChatMessageDocument {
   createdAt!: Date;
 }
 
-export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessageDocument);
+export const ChatMessageSchema =
+  SchemaFactory.createForClass(ChatMessageDocument);
 ChatMessageSchema.index({ roomId: 1, createdAt: -1 });
 
 export const PERSISTENCE_MODELS = [
