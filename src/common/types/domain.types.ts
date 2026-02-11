@@ -41,6 +41,7 @@ export interface RoomRecord {
   type: RoomType;
   hostUserId: string;
   settings: RoomSettings;
+  activeMemberCount: number;
   temporaryExpiresAt?: Date;
   lastActivityAt: Date;
   isArchived: boolean;

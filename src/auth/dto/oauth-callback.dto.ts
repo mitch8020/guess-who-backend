@@ -24,20 +24,4 @@ export class OAuthCallbackDto {
   @IsOptional()
   @IsString()
   prompt?: string;
-
-  @IsOptional()
-  @IsString()
-  mockEmail?: string;
-
-  @IsOptional()
-  @IsString()
-  mockSub?: string;
-
-  @IsOptional()
-  @IsString()
-  mockName?: string;
-
-  @IsOptional()
-  @IsString()
-  mockAvatarUrl?: string;
 }

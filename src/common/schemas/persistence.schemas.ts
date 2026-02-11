@@ -81,6 +81,9 @@ export class RoomDocument {
   @Prop({ type: RoomSettingsSchema, required: true })
   settings!: RoomSettingsDocument;
 
+  @Prop({ required: true, default: 0 })
+  activeMemberCount!: number;
+
   @Prop()
   temporaryExpiresAt?: Date;
 
@@ -234,7 +237,7 @@ InviteSchema.index({ expiresAt: 1, revokedAt: 1 });
 
 @Schema({ collection: 'matches', versionKey: false })
 export class MatchDocument {
-  @Prop({ required: true, index: true })
+  @Prop({ required: true })
   roomId!: string;
 
   @Prop({
@@ -277,6 +280,13 @@ export class MatchDocument {
 export const MatchSchema = SchemaFactory.createForClass(MatchDocument);
 MatchSchema.index({ roomId: 1, createdAt: -1 });
 MatchSchema.index({ roomId: 1, status: 1, createdAt: -1 });
+MatchSchema.index(
+  { roomId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['waiting', 'in_progress'] } },
+  },
+);
 
 @Schema({ collection: 'match_participants', versionKey: false })
 export class MatchParticipantDocument {

@@ -18,7 +18,10 @@ async function bootstrap() {
             origin: frontendOrigins,
             credentials: true,
           }
-        : true,
+        : {
+            origin: true,
+            credentials: true,
+          },
   });
   app.setGlobalPrefix(API_PREFIX);
   app.use(

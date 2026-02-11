@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
+import type { StringValue } from 'ms';
 import { Model } from 'mongoose';
 import { OAuth2Client } from 'google-auth-library';
 import {
@@ -65,14 +66,7 @@ export class AuthService {
   ): Promise<{ url: string; state: string; expiresAt: Date }> {
     const state = createRandomHex(16);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    const allowedFrontendOrigin = this.configService.get<string>(
-      'FRONTEND_URL',
-      'http://localhost:3000',
-    );
-    const normalizedRedirect =
-      redirectTo && redirectTo.startsWith(allowedFrontendOrigin)
-        ? redirectTo
-        : undefined;
+    const normalizedRedirect = this.resolveAllowedRedirect(redirectTo);
     const stateRecord: OAuthStateRecord = {
       state,
       createdAt: new Date(),
@@ -187,12 +181,13 @@ export class AuthService {
       roomId: member.roomId,
       displayName: member.displayName,
     };
+    const guestExpiresIn = this.configService.get<string>(
+      'GUEST_TOKEN_EXPIRES_IN',
+      '24h',
+    );
     return this.jwtService.sign(payload, {
       secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
-      expiresIn: this.configService.get<string>(
-        'GUEST_TOKEN_EXPIRES_IN',
-        '24h',
-      ) as any,
+      expiresIn: guestExpiresIn as StringValue,
     });
   }
 
@@ -296,6 +291,32 @@ export class AuthService {
     return url.toString();
   }
 
+  private resolveAllowedRedirect(
+    redirectTo: string | undefined,
+  ): string | undefined {
+    if (!redirectTo) {
+      return undefined;
+    }
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(redirectTo);
+    } catch {
+      return undefined;
+    }
+
+    const allowedOrigins = (
+      this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000') ??
+      ''
+    )
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (allowedOrigins.includes(redirectUrl.origin)) {
+      return redirectTo;
+    }
+    return undefined;
+  }
+
   private async resolveGoogleProfile(
     dto: OAuthCallbackDto,
   ): Promise<GoogleProfile> {
@@ -330,15 +351,6 @@ export class AuthService {
       };
     }
 
-    if (dto.mockEmail && dto.mockSub && dto.mockName) {
-      return {
-        sub: dto.mockSub,
-        email: dto.mockEmail,
-        name: dto.mockName,
-        picture: dto.mockAvatarUrl,
-      };
-    }
-
     throw new BadRequestException({
       code: 'AUTH_CODE_REQUIRED',
       message: 'OAuth callback code is required.',
@@ -366,12 +378,12 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(
       { type: 'access', sub: user._id },
-      { secret: jwtSecret, expiresIn: accessExpiresIn as any },
+      { secret: jwtSecret, expiresIn: accessExpiresIn as StringValue },
     );
 
     const refreshToken = this.jwtService.sign(
       { type: 'refresh', sub: user._id, sid: sessionId },
-      { secret: jwtSecret, expiresIn: refreshExpiresIn as any },
+      { secret: jwtSecret, expiresIn: refreshExpiresIn as StringValue },
     );
 
     const refreshSession: RefreshSessionRecord = {

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { MongoServerError } from 'mongodb';
 import { Model } from 'mongoose';
 import { MATCH_MIN_IMAGES } from '../common/constants';
 import {
@@ -20,6 +21,7 @@ import {
   MatchRecord,
   MatchReplayFrame,
   RequestPrincipal,
+  RoomMemberRecord,
 } from '../common/types/domain.types';
 import {
   createId,
@@ -63,7 +65,7 @@ export class MatchesService {
 
     const opponentMember = await this.roomMemberModel
       .findById(dto.opponentMemberId)
-      .lean<any>()
+      .lean<RoomMemberRecord>()
       .exec();
     if (
       !opponentMember ||
@@ -140,21 +142,33 @@ export class MatchesService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.matchModel.create(match);
+    try {
+      await this.matchModel.create(match);
+    } catch (error) {
+      if (error instanceof MongoServerError && error.code === 11000) {
+        throw new BadRequestException({
+          code: 'MATCH_ALREADY_ACTIVE',
+          message: 'Only one active match is allowed per room.',
+          details: {},
+        });
+      }
+      throw error;
+    }
 
-    const participants = [hostMember._id, opponentMember._id].map(
-      (memberId) => ({
-        _id: createId(),
-        matchId: match._id,
-        roomMemberId: memberId,
-        boardImageOrder: shuffle(selectedImages),
-        secretTargetImageId: pickRandom(selectedImages),
-        eliminatedImageIds: [],
-        result: 'in_progress' as const,
-        readyAt: now,
-        lastActionAt: now,
-      }),
-    );
+    const participants: MatchParticipantRecord[] = [
+      hostMember._id,
+      opponentMember._id,
+    ].map((memberId) => ({
+      _id: createId(),
+      matchId: match._id,
+      roomMemberId: memberId,
+      boardImageOrder: shuffle(selectedImages),
+      secretTargetImageId: pickRandom(selectedImages),
+      eliminatedImageIds: [],
+      result: 'in_progress' as const,
+      readyAt: now,
+      lastActionAt: now,
+    }));
     await this.matchParticipantModel.insertMany(participants);
 
     await this.appendAction(match._id, {
@@ -320,7 +334,7 @@ export class MatchesService {
     const payload = dto.payload ?? {};
     switch (dto.actionType) {
       case 'eliminate': {
-        const imageId = String(payload.imageId ?? '');
+        const imageId = this.readImageId(payload);
         if (!imageId || !actorParticipant.boardImageOrder.includes(imageId)) {
           throw new BadRequestException({
             code: 'ELIMINATE_IMAGE_INVALID',
@@ -334,7 +348,7 @@ export class MatchesService {
         break;
       }
       case 'guess': {
-        const guessedImageId = String(payload.imageId ?? '');
+        const guessedImageId = this.readImageId(payload);
         if (!guessedImageId) {
           throw new BadRequestException({
             code: 'GUESS_IMAGE_REQUIRED',
@@ -548,11 +562,11 @@ export class MatchesService {
               userId: principal.userId,
               status: 'active',
             })
-            .lean<any>()
+            .lean<RoomMemberRecord>()
             .exec()
         : await this.roomMemberModel
             .findById(principal.memberId)
-            .lean<any>()
+            .lean<RoomMemberRecord>()
             .exec();
 
     const myParticipant = participants.find(
@@ -617,5 +631,10 @@ export class MatchesService {
     };
     await this.matchActionModel.create(actionRecord);
     return actionRecord;
+  }
+
+  private readImageId(payload: Record<string, unknown>): string {
+    const imageId = payload.imageId;
+    return typeof imageId === 'string' ? imageId.trim() : '';
   }
 }

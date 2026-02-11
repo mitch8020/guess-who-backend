@@ -1,8 +1,6 @@
 import {
-  Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   Post,
   Query,
@@ -15,9 +13,7 @@ import { CurrentPrincipal } from '../common/decorators/current-principal.decorat
 import { AccessTokenGuard } from '../common/guards/access-token.guard';
 import { RequestPrincipal } from '../common/types/domain.types';
 import { AuthService } from './auth.service';
-import { LogoutDto } from './dto/logout.dto';
 import { OAuthCallbackDto } from './dto/oauth-callback.dto';
-import { RefreshDto } from './dto/refresh.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -38,19 +34,17 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<Record<string, unknown>> {
     const session = await this.authService.handleGoogleCallback(query);
+    this.attachRefreshCookie(response, session.refreshToken);
     if (session.redirectTo) {
       const redirectUrl = new URL(session.redirectTo);
       redirectUrl.hash = new URLSearchParams({
         accessToken: session.accessToken,
-        refreshToken: session.refreshToken,
       }).toString();
       response.redirect(redirectUrl.toString());
       return { redirected: true };
     }
-    this.attachRefreshCookie(response, session.refreshToken);
     return {
       accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
       user: session.user,
     };
   }
@@ -58,16 +52,9 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   async refresh(
-    @Body() body: RefreshDto,
-    @Headers('authorization') authorizationHeader: string | undefined,
     @Res({ passthrough: true }) response: Response,
   ): Promise<Record<string, unknown>> {
-    const tokenFromHeader =
-      this.authService.extractBearerToken(authorizationHeader);
-    const refreshToken =
-      body.refreshToken ??
-      tokenFromHeader ??
-      response.req.cookies?.refreshToken;
+    const refreshToken = this.readRefreshCookie(response);
     if (!refreshToken) {
       throw new UnauthorizedException({
         code: 'REFRESH_TOKEN_REQUIRED',
@@ -79,28 +66,18 @@ export class AuthController {
     this.attachRefreshCookie(response, session.refreshToken);
     return {
       accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
       user: session.user,
     };
   }
 
   @Post('logout')
   @HttpCode(204)
-  async logout(
-    @Body() body: LogoutDto,
-    @Headers('authorization') authorizationHeader: string | undefined,
-    @Res({ passthrough: true }) response: Response,
-  ): Promise<void> {
-    const tokenFromHeader =
-      this.authService.extractBearerToken(authorizationHeader);
-    const refreshToken =
-      body.refreshToken ??
-      tokenFromHeader ??
-      response.req.cookies?.refreshToken;
+  async logout(@Res({ passthrough: true }) response: Response): Promise<void> {
+    const refreshToken = this.readRefreshCookie(response);
     if (refreshToken) {
       await this.authService.logout(refreshToken);
     }
-    response.clearCookie('refreshToken');
+    response.clearCookie('refreshToken', this.refreshCookieOptions);
   }
 
   @Get('me')
@@ -120,12 +97,35 @@ export class AuthController {
   }
 
   private attachRefreshCookie(response: Response, refreshToken: string): void {
-    response.cookie('refreshToken', refreshToken, {
+    response.cookie('refreshToken', refreshToken, this.refreshCookieOptions);
+  }
+
+  private readRefreshCookie(response: Response): string | undefined {
+    const request = response.req as unknown;
+    if (!request || typeof request !== 'object') {
+      return undefined;
+    }
+    const cookies = (request as { cookies?: unknown }).cookies;
+    if (!cookies || typeof cookies !== 'object') {
+      return undefined;
+    }
+    const cookieValue = (cookies as Record<string, unknown>).refreshToken;
+    return typeof cookieValue === 'string' ? cookieValue : undefined;
+  }
+
+  private get refreshCookieOptions(): {
+    httpOnly: true;
+    sameSite: 'lax';
+    secure: boolean;
+    path: string;
+    maxAge: number;
+  } {
+    return {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       path: '/api/auth',
       maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    };
   }
 }

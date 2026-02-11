@@ -44,14 +44,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     if (status >= 500) {
       const roomId =
-        (request.params?.roomId as string | undefined) ??
-        (request.body?.roomId as string | undefined);
+        this.readField(request.params, 'roomId') ??
+        this.readField(request.body, 'roomId');
       const matchId =
-        (request.params?.matchId as string | undefined) ??
-        (request.body?.matchId as string | undefined);
+        this.readField(request.params, 'matchId') ??
+        this.readField(request.body, 'matchId');
       const memberId =
-        (request.params?.memberId as string | undefined) ??
-        (request.body?.memberId as string | undefined);
+        this.readField(request.params, 'memberId') ??
+        this.readField(request.body, 'memberId');
       this.logger.error(
         `${request.method} ${request.url} -> ${status} ${message}`,
         exception instanceof Error ? exception.stack : undefined,
@@ -74,5 +74,13 @@ export class ApiExceptionFilter implements ExceptionFilter {
         details,
       },
     });
+  }
+
+  private readField(source: unknown, key: string): string | undefined {
+    if (!source || typeof source !== 'object') {
+      return undefined;
+    }
+    const value = (source as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : undefined;
   }
 }

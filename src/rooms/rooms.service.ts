@@ -65,6 +65,7 @@ export class RoomsService {
       type: dto.type,
       hostUserId,
       settings,
+      activeMemberCount: 1,
       temporaryExpiresAt:
         dto.type === 'temporary'
           ? new Date(now.getTime() + this.temporaryRoomTtlHours * 3_600_000)
@@ -142,16 +143,25 @@ export class RoomsService {
   ): Promise<RoomRecord> {
     const room = await this.getRoomById(roomId);
     this.ensureHostUser(room, hostUserId);
+    const nextSettings = dto.settings
+      ? this.normalizeRoomSettings({
+          ...room.settings,
+          ...dto.settings,
+        })
+      : room.settings;
+    if (nextSettings.maxPlayers < room.activeMemberCount) {
+      throw new BadRequestException({
+        code: 'ROOM_MAX_PLAYERS_TOO_LOW',
+        message:
+          'Max players cannot be lower than the number of currently active members.',
+        details: { activeMemberCount: room.activeMemberCount },
+      });
+    }
 
     const updatedRoom: RoomRecord = {
       ...room,
       name: dto.name?.trim() ?? room.name,
-      settings: dto.settings
-        ? this.normalizeRoomSettings({
-            ...room.settings,
-            ...dto.settings,
-          })
-        : room.settings,
+      settings: nextSettings,
       updatedAt: new Date(),
     };
 
@@ -208,7 +218,7 @@ export class RoomsService {
       });
     }
 
-    await this.roomMemberModel
+    const updateResult = await this.roomMemberModel
       .updateOne(
         { _id: dto.memberId },
         {
@@ -219,6 +229,14 @@ export class RoomsService {
         },
       )
       .exec();
+    if (updateResult.modifiedCount !== 1) {
+      throw new NotFoundException({
+        code: 'MEMBER_NOT_FOUND',
+        message: 'Room member was not found.',
+        details: {},
+      });
+    }
+    await this.releaseSeat(roomId);
     return this.listRoomMembers(roomId);
   }
 
@@ -371,31 +389,61 @@ export class RoomsService {
     userId: string,
     displayName: string,
   ): Promise<RoomMemberRecord> {
+    const now = new Date();
     const existing = await this.roomMemberModel
       .findOne({ roomId, userId })
       .lean<RoomMemberRecord>()
       .exec();
     if (existing) {
-      await this.roomMemberModel
-        .updateOne(
-          { _id: existing._id },
-          {
-            $set: {
-              status: 'active',
-              lastSeenAt: new Date(),
-              displayName,
+      if (existing.status === 'kicked') {
+        throw new ForbiddenException({
+          code: 'MEMBER_KICKED',
+          message: 'This account was removed by the room host.',
+          details: {},
+        });
+      }
+      if (existing.status === 'active') {
+        await this.roomMemberModel
+          .updateOne(
+            { _id: existing._id },
+            { $set: { lastSeenAt: now, displayName } },
+          )
+          .exec();
+        return {
+          ...existing,
+          lastSeenAt: now,
+          displayName,
+        };
+      }
+
+      await this.reserveSeat(roomId);
+      try {
+        await this.roomMemberModel
+          .updateOne(
+            { _id: existing._id },
+            {
+              $set: {
+                status: 'active',
+                lastSeenAt: now,
+                displayName,
+              },
             },
-          },
-        )
-        .exec();
+          )
+          .exec();
+      } catch (error) {
+        await this.releaseSeat(roomId);
+        throw error;
+      }
+      await this.touchRoomActivity(roomId);
       return {
         ...existing,
         status: 'active',
-        lastSeenAt: new Date(),
+        lastSeenAt: now,
         displayName,
       };
     }
 
+    await this.reserveSeat(roomId);
     const member: RoomMemberRecord = {
       _id: createId(),
       roomId,
@@ -403,10 +451,16 @@ export class RoomsService {
       displayName,
       role: 'player',
       status: 'active',
-      joinedAt: new Date(),
-      lastSeenAt: new Date(),
+      joinedAt: now,
+      lastSeenAt: now,
     };
-    await this.roomMemberModel.create(member);
+    try {
+      await this.roomMemberModel.create(member);
+    } catch (error) {
+      await this.releaseSeat(roomId);
+      throw error;
+    }
+    await this.touchRoomActivity(roomId);
     return member;
   }
 
@@ -415,6 +469,8 @@ export class RoomsService {
     guestSessionId: string,
     displayName: string,
   ): Promise<RoomMemberRecord> {
+    const now = new Date();
+    await this.reserveSeat(roomId);
     const member: RoomMemberRecord = {
       _id: createId(),
       roomId,
@@ -422,10 +478,16 @@ export class RoomsService {
       displayName,
       role: 'player',
       status: 'active',
-      joinedAt: new Date(),
-      lastSeenAt: new Date(),
+      joinedAt: now,
+      lastSeenAt: now,
     };
-    await this.roomMemberModel.create(member);
+    try {
+      await this.roomMemberModel.create(member);
+    } catch (error) {
+      await this.releaseSeat(roomId);
+      throw error;
+    }
+    await this.touchRoomActivity(roomId);
     return member;
   }
 
@@ -458,6 +520,41 @@ export class RoomsService {
         details: {},
       });
     }
+  }
+
+  private async reserveSeat(roomId: string): Promise<void> {
+    const result = await this.roomModel
+      .updateOne(
+        {
+          _id: roomId,
+          isArchived: false,
+          $expr: { $lt: ['$activeMemberCount', '$settings.maxPlayers'] },
+        },
+        {
+          $inc: { activeMemberCount: 1 },
+          $set: { updatedAt: new Date() },
+        },
+      )
+      .exec();
+    if (result.modifiedCount !== 1) {
+      throw new BadRequestException({
+        code: 'ROOM_FULL',
+        message: 'Room has reached its maximum player capacity.',
+        details: {},
+      });
+    }
+  }
+
+  private async releaseSeat(roomId: string): Promise<void> {
+    await this.roomModel
+      .updateOne(
+        { _id: roomId, activeMemberCount: { $gt: 0 } },
+        {
+          $inc: { activeMemberCount: -1 },
+          $set: { updatedAt: new Date() },
+        },
+      )
+      .exec();
   }
 
   private normalizeRoomSettings(

@@ -11,7 +11,11 @@ import {
   InviteDocument,
   MODEL_NAMES,
 } from '../common/schemas/persistence.schemas';
-import { RequestPrincipal } from '../common/types/domain.types';
+import {
+  InviteRecord,
+  RequestPrincipal,
+  RoomMemberRecord,
+} from '../common/types/domain.types';
 import { createId, createInviteCode } from '../common/utils/crypto.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RoomsService } from '../rooms/rooms.service';
@@ -39,7 +43,7 @@ export class InvitesService {
     );
     const room = await this.roomsService.getRoomById(roomId);
 
-    const invite = {
+    const invite: InviteRecord = {
       _id: createId(),
       roomId,
       code: await this.createUniqueCode(),
@@ -91,54 +95,61 @@ export class InvitesService {
   ): Promise<Record<string, unknown>> {
     const invite = await this.requireInviteByCode(code);
     const room = await this.roomsService.getRoomById(invite.roomId);
-
-    if (invite.maxUses !== undefined && invite.usesCount >= invite.maxUses) {
-      throw new BadRequestException({
-        code: 'INVITE_MAX_USES_REACHED',
-        message: 'Invite has reached its usage limit.',
-        details: {},
-      });
-    }
-
     const sanitizedDisplayName = await this.getUniqueDisplayName(
       room._id,
       dto.displayName.trim(),
     );
-    let member;
+    const usageReserved = await this.reserveInviteUsage(invite);
+    let memberPersisted = false;
+    let member: RoomMemberRecord;
     let guestToken: string | undefined;
-
-    if (principal?.kind === 'user') {
-      member = await this.roomsService.createOrReactivateUserMember(
-        room._id,
-        principal.userId,
-        sanitizedDisplayName,
-      );
-    } else {
-      if (!invite.allowGuestJoin || !room.settings.allowGuestJoin) {
-        throw new ForbiddenException({
-          code: 'GUEST_JOIN_DISABLED',
-          message: 'Guests are not allowed to join this room.',
-          details: {},
-        });
+    try {
+      if (principal?.kind === 'user') {
+        member = await this.roomsService.createOrReactivateUserMember(
+          room._id,
+          principal.userId,
+          sanitizedDisplayName,
+        );
+      } else {
+        if (!invite.allowGuestJoin || !room.settings.allowGuestJoin) {
+          throw new ForbiddenException({
+            code: 'GUEST_JOIN_DISABLED',
+            message: 'Guests are not allowed to join this room.',
+            details: {},
+          });
+        }
+        const guestSessionId = createId();
+        member = await this.roomsService.createGuestMember(
+          room._id,
+          guestSessionId,
+          sanitizedDisplayName,
+        );
+        guestToken = this.authService.createGuestToken(member);
       }
-      const guestSessionId = createId();
-      member = await this.roomsService.createGuestMember(
-        room._id,
-        guestSessionId,
-        sanitizedDisplayName,
-      );
-      guestToken = this.authService.createGuestToken(member);
-    }
+      memberPersisted = true;
 
-    await this.inviteModel
-      .updateOne({ _id: invite._id }, { $inc: { usesCount: 1 } })
-      .exec();
-    await this.roomsService.touchRoomActivity(room._id);
-    this.realtimeService.publishRoomUpdate(room._id, 'member.joined', {
-      roomId: room._id,
-      memberId: member._id,
-      displayName: member.displayName,
-    });
+      if (!usageReserved) {
+        await this.inviteModel
+          .updateOne({ _id: invite._id }, { $inc: { usesCount: 1 } })
+          .exec();
+      }
+      await this.roomsService.touchRoomActivity(room._id);
+      this.realtimeService.publishRoomUpdate(room._id, 'member.joined', {
+        roomId: room._id,
+        memberId: member._id,
+        displayName: member.displayName,
+      });
+    } catch (error) {
+      if (usageReserved && !memberPersisted) {
+        await this.inviteModel
+          .updateOne(
+            { _id: invite._id, usesCount: { $gt: 0 } },
+            { $inc: { usesCount: -1 } },
+          )
+          .exec();
+      }
+      throw error;
+    }
 
     return {
       member,
@@ -153,9 +164,10 @@ export class InvitesService {
     principal: RequestPrincipal,
   ): Promise<Record<string, unknown>> {
     await this.roomsService.ensureHostMember(roomId, principal);
+    const now = new Date();
     const invite = await this.inviteModel
       .findOne({ _id: inviteId, roomId })
-      .lean<any>()
+      .lean<InviteRecord>()
       .exec();
     if (!invite) {
       throw new NotFoundException({
@@ -166,20 +178,20 @@ export class InvitesService {
     }
 
     await this.inviteModel
-      .updateOne({ _id: inviteId }, { $set: { revokedAt: new Date() } })
+      .updateOne({ _id: inviteId }, { $set: { revokedAt: now } })
       .exec();
     this.realtimeService.publishRoomUpdate(roomId, 'invite.revoked', {
       roomId,
       inviteId,
     });
-    return { invite: { ...invite, revokedAt: new Date() } };
+    return { invite: { ...invite, revokedAt: now } };
   }
 
-  private async requireInviteByCode(code: string): Promise<any> {
+  private async requireInviteByCode(code: string): Promise<InviteRecord> {
     const normalizedCode = code.trim().toUpperCase();
     const invite = await this.inviteModel
       .findOne({ code: normalizedCode })
-      .lean<any>()
+      .lean<InviteRecord>()
       .exec();
     if (!invite || invite.revokedAt) {
       throw new NotFoundException({
@@ -196,6 +208,26 @@ export class InvitesService {
       });
     }
     return invite;
+  }
+
+  private async reserveInviteUsage(invite: InviteRecord): Promise<boolean> {
+    if (invite.maxUses === undefined) {
+      return false;
+    }
+    const result = await this.inviteModel
+      .updateOne(
+        { _id: invite._id, usesCount: { $lt: invite.maxUses } },
+        { $inc: { usesCount: 1 } },
+      )
+      .exec();
+    if (result.modifiedCount !== 1) {
+      throw new BadRequestException({
+        code: 'INVITE_MAX_USES_REACHED',
+        message: 'Invite has reached its usage limit.',
+        details: {},
+      });
+    }
+    return true;
   }
 
   private async createUniqueCode(): Promise<string> {

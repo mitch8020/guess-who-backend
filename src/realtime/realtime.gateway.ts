@@ -8,6 +8,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { RequestPrincipal } from '../common/types/domain.types';
@@ -22,10 +23,6 @@ interface SocketState {
 
 @WebSocketGateway({
   namespace: '/ws',
-  cors: {
-    origin: '*',
-    credentials: true,
-  },
 })
 export class RealtimeGateway
   implements OnGatewayConnection, OnGatewayDisconnect
@@ -40,8 +37,36 @@ export class RealtimeGateway
     private readonly authService: AuthService,
     private readonly roomsService: RoomsService,
     private readonly realtimeService: RealtimeService,
+    private readonly configService: ConfigService,
   ) {
     this.realtimeService.bindGateway(this);
+  }
+
+  afterInit(server: Server): void {
+    const frontendOrigins = (
+      this.configService.get<string>('FRONTEND_URL') ?? ''
+    )
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    const engine = (
+      server as unknown as { engine?: { opts?: { cors?: unknown } } }
+    ).engine;
+    if (!engine?.opts) {
+      return;
+    }
+
+    engine.opts.cors =
+      frontendOrigins.length > 0
+        ? {
+            origin: frontendOrigins,
+            credentials: true,
+          }
+        : {
+            origin: true,
+            credentials: true,
+          };
   }
 
   handleConnection(client: Socket): void {
@@ -86,8 +111,8 @@ export class RealtimeGateway
     const state = this.requireSocketState(client.id);
     await this.roomsService.ensureActiveMember(payload.roomId, state.principal);
     state.joinedRoomIds.add(payload.roomId);
-    client.join(`room:${payload.roomId}:presence`);
-    client.join(`room:${payload.roomId}:updates`);
+    await client.join(`room:${payload.roomId}:presence`);
+    await client.join(`room:${payload.roomId}:updates`);
     this.emitRoomPresence(
       payload.roomId,
       this.buildRoomPresence(payload.roomId),
@@ -107,7 +132,7 @@ export class RealtimeGateway
     const state = this.requireSocketState(client.id);
     await this.roomsService.ensureActiveMember(payload.roomId, state.principal);
     state.joinedMatchIds.add(payload.matchId);
-    client.join(`match:${payload.matchId}:state`);
+    await client.join(`match:${payload.matchId}:state`);
     return { ok: true };
   }
 
@@ -140,7 +165,9 @@ export class RealtimeGateway
   }
 
   private extractSocketToken(client: Socket): string | undefined {
-    const authToken = client.handshake.auth?.token;
+    const authToken = (
+      client.handshake.auth as Record<string, unknown> | undefined
+    )?.token;
     if (typeof authToken === 'string') {
       return authToken;
     }
