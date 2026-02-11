@@ -18,6 +18,10 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
+    "test:cov:unit": "jest --config ./jest.layer.unit.config.js",
+    "test:cov:integration": "jest --config ./jest.layer.integration.config.js",
+    "test:cov:component": "jest --config ./jest.layer.component.config.js",
+    "test:cov:e2e": "jest --config ./jest.layer.e2e.config.js",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
