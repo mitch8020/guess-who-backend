@@ -15,6 +15,18 @@ export class OAuthCallbackDto {
 
   @IsOptional()
   @IsString()
+  scope?: string;
+
+  @IsOptional()
+  @IsString()
+  authuser?: string;
+
+  @IsOptional()
+  @IsString()
+  prompt?: string;
+
+  @IsOptional()
+  @IsString()
   mockEmail?: string;
 
   @IsOptional()
