@@ -37,8 +37,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
       (responseBody?.error as string | undefined) ??
       (status === 500 ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED');
     const message =
-      (responseBody?.message as string | undefined) ??
-      (exception instanceof Error ? exception.message : 'Unexpected error');
+      status >= 500
+        ? 'Internal server error.'
+        : ((responseBody?.message as string | undefined) ??
+          (exception instanceof Error
+            ? exception.message
+            : 'Unexpected error'));
     const details =
       (responseBody?.details as Record<string, unknown> | undefined) ?? {};
 

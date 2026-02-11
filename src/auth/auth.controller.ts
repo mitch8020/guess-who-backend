@@ -1,5 +1,6 @@
 import {
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   Post,
@@ -36,11 +37,7 @@ export class AuthController {
     const session = await this.authService.handleGoogleCallback(query);
     this.attachRefreshCookie(response, session.refreshToken);
     if (session.redirectTo) {
-      const redirectUrl = new URL(session.redirectTo);
-      redirectUrl.hash = new URLSearchParams({
-        accessToken: session.accessToken,
-      }).toString();
-      response.redirect(redirectUrl.toString());
+      response.redirect(session.redirectTo);
       return { redirected: true };
     }
     return {
@@ -54,6 +51,7 @@ export class AuthController {
   async refresh(
     @Res({ passthrough: true }) response: Response,
   ): Promise<Record<string, unknown>> {
+    this.assertTrustedBrowserOrigin(response);
     const refreshToken = this.readRefreshCookie(response);
     if (!refreshToken) {
       throw new UnauthorizedException({
@@ -73,6 +71,7 @@ export class AuthController {
   @Post('logout')
   @HttpCode(204)
   async logout(@Res({ passthrough: true }) response: Response): Promise<void> {
+    this.assertTrustedBrowserOrigin(response);
     const refreshToken = this.readRefreshCookie(response);
     if (refreshToken) {
       await this.authService.logout(refreshToken);
@@ -98,6 +97,46 @@ export class AuthController {
 
   private attachRefreshCookie(response: Response, refreshToken: string): void {
     response.cookie('refreshToken', refreshToken, this.refreshCookieOptions);
+  }
+
+  private assertTrustedBrowserOrigin(response: Response): void {
+    const request = response.req as unknown;
+    if (!request || typeof request !== 'object') {
+      throw new ForbiddenException({
+        code: 'REQUEST_ORIGIN_INVALID',
+        message: 'Request origin is not trusted.',
+        details: {},
+      });
+    }
+
+    const headers = (request as { headers?: Record<string, unknown> }).headers;
+    const allowedOrigins = (process.env.FRONTEND_URL ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    const origin = headers?.origin;
+    if (typeof origin === 'string' && allowedOrigins.includes(origin)) {
+      return;
+    }
+
+    const referer = headers?.referer;
+    if (typeof referer === 'string') {
+      try {
+        const refererOrigin = new URL(referer).origin;
+        if (allowedOrigins.includes(refererOrigin)) {
+          return;
+        }
+      } catch {
+        // Invalid referer is treated as untrusted.
+      }
+    }
+
+    throw new ForbiddenException({
+      code: 'REQUEST_ORIGIN_INVALID',
+      message: 'Request origin is not trusted.',
+      details: {},
+    });
   }
 
   private readRefreshCookie(response: Response): string | undefined {

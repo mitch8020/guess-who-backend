@@ -14,7 +14,15 @@ import { UsersModule } from '../users/users.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET', 'dev-secret'),
+        secret: (() => {
+          const jwtSecret = configService.get<string>('JWT_SECRET');
+          if (!jwtSecret || jwtSecret.trim().length < 32) {
+            throw new Error(
+              'JWT_SECRET must be configured with at least 32 characters.',
+            );
+          }
+          return jwtSecret;
+        })(),
       }),
     }),
   ],

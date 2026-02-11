@@ -10,20 +10,50 @@ async function bootstrap() {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+  if (frontendOrigins.length === 0) {
+    throw new Error(
+      'FRONTEND_URL must be configured with one or more allowed origins.',
+    );
+  }
 
   const app = await NestFactory.create(AppModule, {
-    cors:
-      frontendOrigins.length > 0
-        ? {
-            origin: frontendOrigins,
-            credentials: true,
-          }
-        : {
-            origin: true,
-            credentials: true,
-          },
+    cors: {
+      origin: frontendOrigins,
+      credentials: true,
+    },
   });
   app.setGlobalPrefix(API_PREFIX);
+  app.use(
+    (
+      _req: unknown,
+      res: {
+        setHeader: (name: string, value: string) => void;
+      },
+      next: () => void,
+    ) => {
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.setHeader('x-frame-options', 'DENY');
+      res.setHeader('referrer-policy', 'no-referrer');
+      res.setHeader(
+        'permissions-policy',
+        'camera=(), microphone=(), geolocation=()',
+      );
+      res.setHeader('cross-origin-opener-policy', 'same-origin');
+      res.setHeader('cross-origin-resource-policy', 'same-site');
+      res.setHeader('origin-agent-cluster', '?1');
+      res.setHeader(
+        'content-security-policy',
+        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      );
+      if (process.env.NODE_ENV === 'production') {
+        res.setHeader(
+          'strict-transport-security',
+          'max-age=31536000; includeSubDomains',
+        );
+      }
+      next();
+    },
+  );
   app.use(
     (
       req: { headers: Record<string, string>; method: string; url: string },

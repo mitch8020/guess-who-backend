@@ -54,6 +54,10 @@ TEMP_ROOM_TTL_HOURS=24
 MAX_UPLOAD_MB=10
 ```
 
+Security notes:
+- `FRONTEND_URL` must be explicitly configured; wildcard CORS is not enabled.
+- `JWT_SECRET` must be at least 32 characters.
+
 3. Start development server:
 
 ```bash

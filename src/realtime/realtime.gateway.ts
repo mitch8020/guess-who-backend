@@ -49,6 +49,11 @@ export class RealtimeGateway
       .split(',')
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
+    if (frontendOrigins.length === 0) {
+      throw new Error(
+        'FRONTEND_URL must be configured with one or more allowed origins.',
+      );
+    }
 
     const engine = (
       server as unknown as { engine?: { opts?: { cors?: unknown } } }
@@ -57,16 +62,10 @@ export class RealtimeGateway
       return;
     }
 
-    engine.opts.cors =
-      frontendOrigins.length > 0
-        ? {
-            origin: frontendOrigins,
-            credentials: true,
-          }
-        : {
-            origin: true,
-            credentials: true,
-          };
+    engine.opts.cors = {
+      origin: frontendOrigins,
+      credentials: true,
+    };
   }
 
   handleConnection(client: Socket): void {
@@ -171,8 +170,7 @@ export class RealtimeGateway
     if (typeof authToken === 'string') {
       return authToken;
     }
-    const queryToken = client.handshake.query?.token;
-    return typeof queryToken === 'string' ? queryToken : undefined;
+    return undefined;
   }
 
   private buildRoomPresence(roomId: string): Record<string, unknown> {

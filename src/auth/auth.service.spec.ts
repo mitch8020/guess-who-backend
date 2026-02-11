@@ -4,8 +4,12 @@ import { AuthService } from './auth.service';
 
 describe('AuthService', () => {
   const buildService = (frontendUrl?: string) => {
+    const jwtSecret = 'test-secret-with-at-least-32-characters';
     const configService = {
       get: jest.fn((key: string, defaultValue?: string) => {
+        if (key === 'JWT_SECRET') {
+          return jwtSecret;
+        }
         if (key === 'FRONTEND_URL') {
           return frontendUrl ?? defaultValue;
         }

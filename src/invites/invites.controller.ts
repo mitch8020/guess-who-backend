@@ -43,6 +43,7 @@ export class InvitesController {
   }
 
   @Get('invites/:code')
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
   resolveInvite(@Param('code') code: string): Promise<Record<string, unknown>> {
     return this.invitesService.resolveInvite(code);
   }

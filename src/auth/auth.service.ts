@@ -43,6 +43,7 @@ interface GoogleProfile {
 @Injectable()
 export class AuthService {
   private readonly oauthClient?: OAuth2Client;
+  private readonly jwtSecret: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -53,6 +54,14 @@ export class AuthService {
     @InjectModel(MODEL_NAMES.RefreshSession)
     private readonly refreshSessionModel: Model<RefreshSessionDocument>,
   ) {
+    const jwtSecret = this.configService.get<string>('JWT_SECRET');
+    if (!jwtSecret || jwtSecret.trim().length < 32) {
+      throw new Error(
+        'JWT_SECRET must be configured with at least 32 characters.',
+      );
+    }
+    this.jwtSecret = jwtSecret;
+
     const clientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = this.configService.get<string>('GOOGLE_CLIENT_SECRET');
     const callbackUrl = this.configService.get<string>('GOOGLE_CALLBACK_URL');
@@ -186,7 +195,7 @@ export class AuthService {
       '24h',
     );
     return this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
+      secret: this.jwtSecret,
       expiresIn: guestExpiresIn as StringValue,
     });
   }
@@ -208,7 +217,7 @@ export class AuthService {
         type: string;
         sub: string;
       }>(token, {
-        secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
+        secret: this.jwtSecret,
       });
       if (payload.type !== 'access' || !payload.sub) {
         throw new Error('Invalid token payload');
@@ -253,7 +262,7 @@ export class AuthService {
         memberId: string;
         displayName: string;
       }>(token, {
-        secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
+        secret: this.jwtSecret,
       });
       if (payload.type !== 'guest') {
         throw new Error('Invalid guest token');
@@ -305,8 +314,7 @@ export class AuthService {
     }
 
     const allowedOrigins = (
-      this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000') ??
-      ''
+      this.configService.get<string>('FRONTEND_URL') ?? ''
     )
       .split(',')
       .map((value) => value.trim())
@@ -362,10 +370,6 @@ export class AuthService {
     accessToken: string;
     refreshToken: string;
   }> {
-    const jwtSecret = this.configService.get<string>(
-      'JWT_SECRET',
-      'dev-secret',
-    );
     const accessExpiresIn = this.configService.get<string>(
       'JWT_EXPIRES_IN',
       '15m',
@@ -378,12 +382,12 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(
       { type: 'access', sub: user._id },
-      { secret: jwtSecret, expiresIn: accessExpiresIn as StringValue },
+      { secret: this.jwtSecret, expiresIn: accessExpiresIn as StringValue },
     );
 
     const refreshToken = this.jwtService.sign(
       { type: 'refresh', sub: user._id, sid: sessionId },
-      { secret: jwtSecret, expiresIn: refreshExpiresIn as StringValue },
+      { secret: this.jwtSecret, expiresIn: refreshExpiresIn as StringValue },
     );
 
     const refreshSession: RefreshSessionRecord = {
@@ -407,7 +411,7 @@ export class AuthService {
         sub: string;
         sid: string;
       }>(refreshToken, {
-        secret: this.configService.get<string>('JWT_SECRET', 'dev-secret'),
+        secret: this.jwtSecret,
       });
 
       if (payload.type !== 'refresh' || !payload.sid || !payload.sub) {
